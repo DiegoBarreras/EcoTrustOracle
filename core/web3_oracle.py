@@ -148,6 +148,7 @@ async def anchor_reading_to_solana(
     reading: Union[MeterReading, Dict[str, Any]],
     force_simulated: bool = False,
     client: Optional[AsyncClient] = None,
+    compliance: Optional[Any] = None,
 ) -> OracleProof:
     """
     Cryptographically anchors the meter reading onto Solana Devnet.
@@ -172,6 +173,8 @@ async def anchor_reading_to_solana(
     canonical = canonical_json(reading)
     data_hash = compute_meter_hash(reading)
     memo_payload = f"{MEMO_PREFIX}{data_hash}"
+    if compliance is not None and getattr(compliance, "status", None):
+        memo_payload = f"{MEMO_PREFIX}{data_hash}:{compliance.status}"
 
     if force_simulated:
         return _generate_simulated_proof(
@@ -334,7 +337,8 @@ def _extract_memo_hash(tx: Dict[str, Any], memo_program_id: str) -> Optional[str
             continue
         text = ix.get("parsed")
         if isinstance(text, str) and text.startswith(MEMO_PREFIX):
-            return text[len(MEMO_PREFIX):].strip()
+            raw = text[len(MEMO_PREFIX):].strip()
+            return raw.split(":")[0] if ":" in raw else raw
     return None
 
 

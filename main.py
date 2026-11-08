@@ -31,6 +31,8 @@ from core.schemas import (
     VerifyRequest,
     VerifyResult,
     VisionAnalysis,
+    ESGCompliance,
+    evaluate_compliance,
 )
 from core.vision_agent import analyze_meter_image, VisionExtractionError
 from core.web3_oracle import anchor_reading_to_solana, verify_anchor, SolanaOracleError
@@ -171,11 +173,12 @@ async def _anchor_and_notify(
     vision: Optional[VisionAnalysis] = None,
     consumption: Optional[float] = None,
     force_simulated: bool = False,
+    compliance: Optional[ESGCompliance] = None,
 ) -> AuditResponse:
     """Shared tail of every audit: anchor on Solana, notify Telegram, build the response."""
     try:
         logger.info(f"[Pipeline] Anchoring reading on Solana Devnet: {reading.value} {reading.unit}")
-        oracle_proof = await anchor_reading_to_solana(reading, force_simulated=force_simulated)
+        oracle_proof = await anchor_reading_to_solana(reading, force_simulated=force_simulated, compliance=compliance)
     except SolanaOracleError as err:
         logger.error(f"Web3 Oracle failed: {err}")
         raise HTTPException(
@@ -192,6 +195,8 @@ async def _anchor_and_notify(
             data_hash=oracle_proof.data_hash,
             chat_id=telegram_chat_id,
             is_simulated=oracle_proof.is_simulated,
+            consumption=consumption,
+            compliance=compliance,
         )
     except NotificationError as err:
         # Partial success: the proof exists even though the alert was not delivered.
@@ -216,6 +221,7 @@ async def _anchor_and_notify(
         execution_time_ms=elapsed_ms,
         vision=vision,
         consumption=consumption,
+        compliance=compliance,
     )
 
 
@@ -237,6 +243,7 @@ async def audit_meter(
     meter_hint: Optional[str] = Form(None, max_length=500, description="Optional context (e.g. 'Main boiler gas flowmeter')"),
     device_id: Optional[str] = Form(None, max_length=128, description="Meter / asset tag (e.g. 'BOILER-03')"),
     previous_value: Optional[float] = Form(None, description="Previous counter reading of this meter, to compute consumption"),
+    monthly_threshold: Optional[float] = Form(None, description="Expected monthly consumption threshold to evaluate against consumption"),
     telegram_chat_id: Optional[str] = Form(None, description="Optional Telegram chat ID override for alerts"),
 ):
     start_time = time.perf_counter()
@@ -274,10 +281,13 @@ async def audit_meter(
     if device_id and device_id.strip():
         reading.device_id = device_id.strip()
     consumption = _check_counter(reading.value, previous_value)
+    thresh = monthly_threshold if monthly_threshold is not None else settings.ESG_MONTHLY_THRESHOLD
+    compliance = evaluate_compliance(consumption, thresh, reading.unit)
 
     # A synthetic reading (no vision key configured) is never written to the chain.
     return await _anchor_and_notify(
-        reading, start_time, telegram_chat_id, vision=vision, consumption=consumption, force_simulated=vision.is_mock
+        reading, start_time, telegram_chat_id, vision=vision, consumption=consumption,
+        force_simulated=vision.is_mock, compliance=compliance
     )
 
 
@@ -297,6 +307,7 @@ async def audit_meter(
 async def audit_sensor(
     reading: MeterReading,
     previous_value: Optional[float] = None,
+    monthly_threshold: Optional[float] = None,
     telegram_chat_id: Optional[str] = None,
 ):
     """
@@ -314,7 +325,11 @@ async def audit_sensor(
         reading.source = "iot_sensor"
 
     consumption = _check_counter(reading.value, previous_value)
-    return await _anchor_and_notify(reading, start_time, telegram_chat_id, consumption=consumption)
+    thresh = monthly_threshold if monthly_threshold is not None else settings.ESG_MONTHLY_THRESHOLD
+    compliance = evaluate_compliance(consumption, thresh, reading.unit)
+    return await _anchor_and_notify(
+        reading, start_time, telegram_chat_id, consumption=consumption, compliance=compliance
+    )
 
 
 @app.post(

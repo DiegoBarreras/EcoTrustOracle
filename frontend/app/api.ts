@@ -22,6 +22,15 @@ export type Vision = {
   reads: VisionRead[];
 };
 
+export type ESGCompliance = {
+  threshold: number;
+  consumption: number;
+  is_breach: boolean;
+  excess_percentage: number | null;
+  status: "COMPLIANT" | "EXCEEDED";
+  detail: string;
+};
+
 export type AuditResponse = {
   status: "success" | "partial_success";
   reading: Reading;
@@ -47,6 +56,7 @@ export type AuditResponse = {
   execution_time_ms: number;
   vision: Vision | null;
   consumption: number | null;
+  compliance?: ESGCompliance | null;
 };
 
 export type VerifyResult = {
@@ -80,31 +90,29 @@ function detailToText(detail: unknown): string {
   return detail == null ? "" : JSON.stringify(detail);
 }
 
-export async function apiPost<T>(path: string, init: RequestInit): Promise<T> {
+export async function apiPost<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API}${path}`, { method: "POST", ...init });
-  } catch {
-    throw new ApiError(`No se pudo conectar con el backend en ${API}`);
+    res = await fetch(`${API}${path}`, init);
+  } catch (netErr) {
+    throw new ApiError(`No se pudo conectar con el backend (${API}): ${netErr instanceof Error ? netErr.message : String(netErr)}`);
   }
-  const text = await res.text();
   let body: unknown = null;
   try {
-    body = text ? JSON.parse(text) : null;
+    body = await res.json();
   } catch {
-    body = null;
+    /* empty */
   }
-  if (res.ok) {
-    if (body === null) throw new ApiError(`Respuesta no válida del backend (HTTP ${res.status})`);
-    return body as T;
+  if (!res.ok) {
+    const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : null;
+    const conflict =
+      res.status === 409 && detail && typeof detail === "object" && "code" in detail && (detail as { code: unknown }).code === "reading_below_previous"
+        ? (detail as Conflict)
+        : undefined;
+    throw new ApiError(detailToText(detail) || `El servidor respondió con HTTP ${res.status}`, conflict);
   }
-  const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : undefined;
-  if (res.status === 409 && detail && typeof detail === "object" && (detail as { code?: unknown }).code === "reading_below_previous") {
-    const d = detail as Conflict;
-    throw new ApiError(d.message || "La lectura es menor que la anterior", d);
-  }
-  const msg = detail !== undefined ? detailToText(detail) : text.trim().slice(0, 300);
-  throw new ApiError(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}${msg ? `: ${msg}` : ""}`);
+  return body as T;
 }
 
-export const short = (s: string | null | undefined, n = 6) => (!s ? "-" : s.length <= n * 2 + 3 ? s : `${s.slice(0, n)}...${s.slice(-n)}`);
+export const short = (s: string | null | undefined, head = 6, tail = 4) =>
+  !s ? "—" : s.length <= head + tail + 3 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;

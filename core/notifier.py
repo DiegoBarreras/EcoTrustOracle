@@ -35,6 +35,8 @@ def format_telegram_audit_message(
     solscan_url: str,
     data_hash: Optional[str] = None,
     is_simulated: bool = False,
+    consumption: Optional[float] = None,
+    compliance: Optional[Any] = None,
 ) -> str:
     """
     Constructs the ESG compliance certificate message formatted in HTML for Telegram.
@@ -79,8 +81,37 @@ def format_telegram_audit_message(
             "<i>Estado: lectura anclada en Solana; verificable con el hash SHA-256.</i>"
         )
 
+    if compliance is not None and getattr(compliance, "is_breach", False):
+        title = "🚨 <b>ECOTRUST ORACLE - ALERTA DE INCUMPLIMIENTO ESG</b>"
+        comp_section = (
+            "--------------------------------\n"
+            f"🚨 <b>ESTADO: UMBRAL MENSUAL EXCEDIDO (+{compliance.excess_percentage}%)</b>\n"
+            f"⚡ <b>Consumo evaluado:</b> <code>{e(consumption if consumption is not None else val)} {e(unit)}</code>\n"
+            f"🎯 <b>Umbral mensual esperado:</b> <code>{e(compliance.threshold)} {e(unit)}</code>\n"
+            "⚠️ <i>Infracción de sobreconsumo auditada y anclada en Solana.</i>\n"
+        )
+    elif compliance is not None and not getattr(compliance, "is_breach", False):
+        title = "🌿 <b>ECOTRUST ORACLE - CERTIFICADO DE AUDITORIA ESG</b>"
+        usage_pct = round((consumption / compliance.threshold) * 100, 1) if consumption is not None and compliance.threshold > 0 else 0
+        comp_section = (
+            "--------------------------------\n"
+            f"🟢 <b>ESTADO ESG: CUMPLIMIENTO CONFORME ({usage_pct}%)</b>\n"
+            f"⚡ <b>Consumo evaluado:</b> <code>{e(consumption if consumption is not None else val)} {e(unit)}</code>\n"
+            f"🎯 <b>Umbral mensual esperado:</b> <code>{e(compliance.threshold)} {e(unit)}</code>\n"
+            "✅ <i>Consumo dentro del límite corporativo permitido.</i>\n"
+        )
+    elif consumption is not None:
+        title = "🌿 <b>ECOTRUST ORACLE - CERTIFICADO DE AUDITORIA ESG</b>"
+        comp_section = (
+            "--------------------------------\n"
+            f"⚡ <b>Consumo del periodo:</b> <code>{e(consumption)} {e(unit)}</code>\n"
+        )
+    else:
+        title = "🌿 <b>ECOTRUST ORACLE - CERTIFICADO DE AUDITORIA ESG</b>"
+        comp_section = ""
+
     message = (
-        "<b>ECOTRUST ORACLE - CERTIFICADO DE AUDITORIA ESG</b>\n"
+        f"{title}\n"
         "--------------------------------\n"
         f"<b>Lectura:</b> <code>{e(val)} {e(unit)}</code>\n"
         f"<b>Fuente:</b> <code>{e(source_label)}</code>\n"
@@ -88,6 +119,7 @@ def format_telegram_audit_message(
         f"<b>Confianza:</b> <code>{e(conf_pct)}</code>\n"
         f"<b>Fecha (UTC):</b> <code>{e(timestamp)}</code>\n"
         f"{hash_line}"
+        f"{comp_section}"
         "--------------------------------\n"
         f"{anchor_block}"
     )
@@ -124,6 +156,8 @@ async def send_audit_notification(
     chat_id: Optional[str] = None,
     *,
     is_simulated: bool = False,
+    consumption: Optional[float] = None,
+    compliance: Optional[Any] = None,
 ) -> NotificationResult:
     """
     Asynchronously delivers the ESG audit notification via Telegram.
@@ -141,7 +175,7 @@ async def send_audit_notification(
     settings = get_settings()
     target_chat = chat_id or settings.TELEGRAM_CHAT_ID
     bot_token = settings.TELEGRAM_BOT_TOKEN
-    message_text = format_telegram_audit_message(reading, solscan_url, data_hash, is_simulated=is_simulated)
+    message_text = format_telegram_audit_message(reading, solscan_url, data_hash, is_simulated=is_simulated, consumption=consumption, compliance=compliance)
 
     # Check for missing credentials -> fallback to mock log
     if not bot_token or not target_chat:

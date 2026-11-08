@@ -91,6 +91,7 @@ export default function Home() {
     if (busy) return;
     const form = new FormData(e.currentTarget);
     const prev = String(form.get("previous_value") ?? "").trim();
+    const thresh = String(form.get("monthly_threshold") ?? "").trim();
     const mode = tab === "sensor" ? "sensor" : "meter";
     if (mode === "meter" && !file) {
       setError("Primero toma o sube una foto del medidor.");
@@ -114,9 +115,13 @@ export default function Home() {
           if (v) body.set(k, v);
         }
         if (prev) body.set("previous_value", prev);
+        if (thresh) body.set("monthly_threshold", thresh);
         res = await apiPost<AuditResponse>("/api/v1/audit-meter", { body });
       } else {
-        const qs = prev ? `?previous_value=${encodeURIComponent(prev)}` : "";
+        const params = new URLSearchParams();
+        if (prev) params.set("previous_value", prev);
+        if (thresh) params.set("monthly_threshold", thresh);
+        const qs = params.toString() ? `?${params.toString()}` : "";
         res = await apiPost<AuditResponse>(`/api/v1/audit-sensor${qs}`, {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -215,7 +220,10 @@ export default function Home() {
                   />
                   <Field id="meter_hint" label="Nota (opcional)" placeholder="Ej: Caldera principal" />
                   <Field id="device_id" label="ID del medidor (opcional)" maxLength={128} placeholder="Ej: MED-001" />
-                  <Field id="previous_value" label="Lectura anterior (opcional)" type="number" step="any" placeholder="Para calcular consumo" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field id="previous_value" label="Lectura anterior (opcional)" type="number" step="any" placeholder="Ej: 1000" />
+                    <Field id="monthly_threshold" label="Umbral mensual (opcional)" type="number" step="any" min="0" placeholder="Ej: 250" />
+                  </div>
                 </>
               ) : (
                 <>
@@ -225,7 +233,10 @@ export default function Home() {
                   </div>
                   <Field id="confidence" label="Confianza (0 a 1)" type="number" step="0.01" min="0" max="1" defaultValue="1" required />
                   <Field id="device_id" label="ID del dispositivo" maxLength={128} placeholder={auditor ? `Por defecto: ${short(auditor, 4)}` : "Ej: SENSOR-07"} />
-                  <Field id="previous_value" label="Lectura anterior (opcional)" type="number" step="any" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field id="previous_value" label="Lectura anterior (opcional)" type="number" step="any" placeholder="Ej: 1000" />
+                    <Field id="monthly_threshold" label="Umbral mensual (opcional)" type="number" step="any" min="0" placeholder="Ej: 250" />
+                  </div>
                 </>
               )}
               <button type="submit" disabled={busy || (tab === "meter" && !file)} className={submitBtn}>

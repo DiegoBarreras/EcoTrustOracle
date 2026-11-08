@@ -4,6 +4,7 @@ Defines strict Pydantic models for data interchange between modules:
 Vision Agent -> Web3 Oracle -> Notifier -> Orchestrator (FastAPI).
 """
 
+import math
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator
@@ -203,6 +204,59 @@ class VisionAnalysis(BaseModel):
     reads: List[VisionRead] = Field(default_factory=list, description="Every independent read, including dissenting or failed ones")
 
 
+class ESGCompliance(BaseModel):
+    """
+    Evaluates net period consumption (reading.value - previous_value) against
+    the expected monthly consumption threshold.
+    """
+    threshold: float = Field(..., description="Expected monthly consumption threshold")
+    consumption: float = Field(..., description="Net period consumption evaluated against threshold")
+    is_breach: bool = Field(..., description="True if consumption exceeds threshold")
+    excess_percentage: Optional[float] = Field(default=None, description="Percentage exceeded if is_breach is True")
+    status: str = Field(default="COMPLIANT", description="COMPLIANT | EXCEEDED")
+    detail: str = Field(default="", description="Human-readable explanation of compliance status")
+
+
+def evaluate_compliance(
+    consumption: Optional[float],
+    threshold: Optional[float],
+    unit: str = "kWh",
+) -> Optional[ESGCompliance]:
+    """
+    Compares the calculated net consumption against the expected monthly threshold.
+    If consumption exceeds the threshold, flags an ESG compliance breach.
+    """
+    if consumption is None or threshold is None:
+        return None
+    if not math.isfinite(threshold) or threshold <= 0:
+        return None
+
+    is_breach = consumption > threshold
+    excess_pct = round(((consumption - threshold) / threshold) * 100, 1) if is_breach else None
+    status = "EXCEEDED" if is_breach else "COMPLIANT"
+
+    if is_breach:
+        detail = (
+            f"El consumo de {consumption} {unit} superó el umbral mensual esperado "
+            f"de {threshold} {unit} (+{excess_pct}% sobreconsumo)."
+        )
+    else:
+        usage_pct = round((consumption / threshold) * 100, 1)
+        detail = (
+            f"El consumo de {consumption} {unit} se encuentra dentro del umbral esperado "
+            f"de {threshold} {unit} ({usage_pct}% del límite mensual)."
+        )
+
+    return ESGCompliance(
+        threshold=threshold,
+        consumption=consumption,
+        is_breach=is_breach,
+        excess_percentage=excess_pct,
+        status=status,
+        detail=detail,
+    )
+
+
 class AuditResponse(BaseModel):
     """
     Contract 4: Output of main.py orchestrator endpoint POST /api/v1/audit-meter.
@@ -235,6 +289,10 @@ class AuditResponse(BaseModel):
     consumption: Optional[float] = Field(
         default=None,
         description="reading.value - previous_value, when the client sent the previous counter reading",
+    )
+    compliance: Optional[ESGCompliance] = Field(
+        default=None,
+        description="ESG threshold compliance evaluated on net consumption",
     )
 
 
