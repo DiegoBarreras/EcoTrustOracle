@@ -173,6 +173,17 @@ uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 uv run pytest -v
 ```
 
+### 6. Run the Demo Dashboard (Next.js + Tailwind + Solana Wallet Adapter)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000), connect Phantom/Solflare, and upload a meter photo or send sensor telemetry. The backend URL defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_API_URL` in `frontend/.env.local`.
+
+### 7. Monetization
+See [`X402.md`](X402.md) for the planned HTTP 402 pay-per-audit model (not yet implemented).
+
 ---
 
 ## 📡 API Reference

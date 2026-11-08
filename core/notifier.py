@@ -130,31 +130,40 @@ async def send_audit_notification(
             )
         raise NotificationError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured")
 
-    try:
-        # Offload synchronous requests call to asyncio threadpool
-        res = await asyncio.to_thread(_sync_telegram_send, bot_token, str(target_chat), message_text)
-        result_payload = res.get("result", {})
-        msg_id = result_payload.get("message_id")
+    # TELEGRAM_CHAT_ID (or the override) may hold several comma-separated chat IDs.
+    chat_ids = [c.strip() for c in str(target_chat).split(",") if c.strip()]
+    delivered: Dict[str, Any] = {}
+    failures: Dict[str, str] = {}
+    for cid in chat_ids:
+        try:
+            # Offload synchronous requests call to asyncio threadpool
+            res = await asyncio.to_thread(_sync_telegram_send, bot_token, cid, message_text)
+            delivered[cid] = res.get("result", {}).get("message_id")
+            logger.info(f"✅ [Notifier] Telegram message delivered to {cid} (Message ID: {delivered[cid]})")
+        except Exception as exc:
+            logger.error(f"❌ [Notifier] Telegram dispatch to {cid} failed: {exc}", exc_info=True)
+            failures[cid] = str(exc)
 
-        logger.info(f"✅ [Notifier] Telegram message delivered to {target_chat} (Message ID: {msg_id})")
+    error = "; ".join(f"{cid}: {err}" for cid, err in failures.items()) or None
+    if delivered:
+        # Partial delivery still counts as sent; failed recipients are reported in `error`.
+        return NotificationResult(
+            sent=True,
+            channel="telegram",
+            recipient=",".join(delivered),
+            message_id=next(iter(delivered.values())) if len(delivered) == 1 else ",".join(str(m) for m in delivered.values()),
+            is_mock=False,
+            error=error,
+        )
+
+    error = error or "no valid chat IDs"
+    if settings.NOTIFIER_MOCK_FALLBACK:
         return NotificationResult(
             sent=True,
             channel="telegram",
             recipient=str(target_chat),
-            message_id=msg_id,
-            is_mock=False,
-            error=None,
+            message_id=None,
+            is_mock=True,
+            error=error,
         )
-
-    except Exception as exc:
-        logger.error(f"❌ [Notifier] Telegram notification dispatch failed: {exc}", exc_info=True)
-        if settings.NOTIFIER_MOCK_FALLBACK:
-            return NotificationResult(
-                sent=True,
-                channel="telegram",
-                recipient=str(target_chat),
-                message_id=None,
-                is_mock=True,
-                error=str(exc),
-            )
-        raise NotificationError(f"Failed to dispatch Telegram message: {exc}") from exc
+    raise NotificationError(f"Failed to dispatch Telegram message: {error}")

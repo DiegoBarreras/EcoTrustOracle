@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     )
     TELEGRAM_CHAT_ID: Optional[str] = Field(
         default=None,
-        description="Telegram Default Chat / Channel ID to receive ESG audit alerts",
+        description="Telegram Chat / Channel ID(s) to receive ESG audit alerts, comma-separated for several recipients",
     )
     NOTIFIER_MOCK_FALLBACK: bool = Field(
         default=True,
