@@ -1,6 +1,7 @@
 "use client";
 
 import { fmtNum, type AuditResponse } from "./api";
+import type { Locale } from "./i18n";
 import { AnomalyBanner, ComparisonPanel } from "./ComparisonPanel";
 import { LimitBar } from "./LimitBar";
 import { Banner, card, ProofSection, Row, telegramText } from "./ui";
@@ -78,7 +79,8 @@ export function VisionDetails({ vision, majority }: { vision: NonNullable<AuditR
   );
 }
 
-export function ResultCard({ result, onVerify }: { result: AuditResponse; onVerify: () => void }) {
+// shortcut: `lang` is accepted for the bilingual page but the card body is still Spanish; translate it in the redesign.
+export function ResultCard({ result, onVerify }: { result: AuditResponse; onVerify: () => void; lang?: Locale }) {
   const { reading, oracle_proof: proof, notification: n, vision, comparison, limit_status } = result;
   const tg = telegramText(n);
 

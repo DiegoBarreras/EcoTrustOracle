@@ -3,12 +3,29 @@
 [![Solana Devnet](https://img.shields.io/badge/Solana-Devnet-14F195?style=for-the-badge&logo=solana&logoColor=black)](https://solscan.io/?cluster=devnet)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![AI Vision: DeepSeek | Gemini | Claude](https://img.shields.io/badge/AI_Vision-DeepSeek_%7C_Gemini_%7C_Claude-4D6BFE?style=for-the-badge)](#3-configure-credentials-env)
-[![Package Manager: uv](https://img.shields.io/badge/Managed_with-uv-DE5FE9?style=for-the-badge)](https://github.com/astral-sh/uv)
+[![Next.js 15](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org)
+[![AI Vision: Gemini | Claude | DeepSeek](https://img.shields.io/badge/AI_Vision-Gemini_%7C_Claude_%7C_DeepSeek-4D6BFE?style=for-the-badge)](#3-configure-credentials-env)
+[![Telegram Bot: @Es0TrustBot](https://img.shields.io/badge/Telegram_Bot-@Es0TrustBot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/Es0TrustBot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 > **Solana Hackathon (AI Track)**  
-> **EcoTrust Oracle** is a decentralized physical oracle that connects real-world industrial infrastructure (water flowmeters, energy cyclometer drums, and emissions dials) directly to the **Solana Blockchain**.
+> **EcoTrust Oracle** is a decentralized physical oracle that bridges real-world industrial infrastructure (water flowmeters, energy cyclometers, and emissions gauges) directly to the **Solana Blockchain**. It eliminates manual audit greenwashing through multimodal AI vision consensus, cryptographic SHA-256 canonical hashing, monthly threshold breach detection, and instant Telegram compliance certificates.
+
+---
+
+## 📱 Live Telegram Compliance Bot: `@Es0TrustBot`
+
+EcoTrust Oracle features an interactive, real-time Telegram bot for instant corporate compliance notifications and live audit tracking:
+
+* **Official Bot Username**: [`@Es0TrustBot`](https://t.me/Es0TrustBot)
+* **Direct Link**: [https://t.me/Es0TrustBot](https://t.me/Es0TrustBot)
+
+### How to test the Telegram Bot:
+1. Open Telegram and search for **`@Es0TrustBot`** (or click the link above).
+2. Press **Start** or send `/start` to register your chat ID. The bot will welcome you and acknowledge your registration.
+3. Submit an audit from the Web Dashboard at [http://localhost:3000](http://localhost:3000) (upload a meter photo or submit IoT sensor telemetry).
+4. Watch your official ESG compliance certificate arrive in Telegram within ~3 seconds, complete with the direct **Solscan Devnet proof URL** and **monthly consumption threshold evaluation**!
+5. Send `/status` to the bot to check Oracle operational health, or `/help` for quick reference commands.
 
 ---
 
@@ -17,14 +34,15 @@
 ### ⚠️ The Problem: Greenwashing & Manual Audit Fraud
 * Corporate ESG (Environmental, Social, and Governance) compliance relies heavily on manual clipboard inspections.
 * Legacy analog meters lack IoT connectivity and cannot be connected to corporate ERPs without multi-million dollar sensor retrofitting.
-* Carbon credits and sustainability claims are vulnerable to forgery, misreporting, and auditor collusion.
+* Carbon credits and sustainability claims are vulnerable to forgery, backdated meter rollbacks, and auditor collusion.
 
 ### 🛡 The Solution: EcoTrust Oracle
-* **Physical-to-Chain AI Bridge**: Plant operators take a single photo using any mobile camera.
-* **Multi-Provider AI Vision (DeepSeek, Gemini or Claude)**: Evaluates the image, interprets multi-dial registers, cyclometer drums, digital 7-segment displays, or needle gauges, and extracts a strict schema (`value`, `unit`, `confidence`, `timestamp`). The provider is picked automatically from the API key, and every photo is read 3 times: if the reads disagree, confidence drops below 0.70 and the reading is flagged for human review.
-* **Deterministic Cryptographic Hashing**: Generates an authoritative SHA-256 fingerprint from the canonical reading.
-* **Solana Memo Program Anchoring**: Anchors the hash onto **Solana Devnet** via the native Memo Program (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`), creating an immutable, verifiable ESG certificate with zero smart contract deployment overhead.
-* **Real-time Telegram Alerts**: Pushes verifiable audit summaries with instant [Solscan Devnet](https://solscan.io/?cluster=devnet) links directly to compliance auditors.
+* **Physical-to-Chain AI Bridge**: Plant operators take a single photo using any mobile camera or feed direct IoT telemetry.
+* **Multi-Provider AI Vision Consensus**: Google Gemini, Anthropic Claude, or DeepSeek inspect the image with 3 independent parallel passes. If reads disagree, confidence drops and the audit is flagged for human review.
+* **Anti-Tampering Counter Checks**: Cumulative meters cannot roll back; if a new reading is lower than the previous reading, the system rejects it with HTTP 409 before touching the blockchain.
+* **Monthly Consumption Thresholds**: Evaluates net period consumption (`current - previous`) against corporate ESG targets, tagging on-chain Solana Memos as `:EXCEEDED` or `:COMPLIANT`.
+* **Solana Memo Program Anchoring**: Anchors the deterministic SHA-256 hash onto **Solana Devnet** via the native Memo Program (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`), creating permanent proof with zero smart contract overhead.
+* **Bilingual Landing Page & Web Dashboard**: Full English and Spanish localization with live pipeline tracking and an independent on-chain verifier.
 
 ---
 
@@ -41,18 +59,19 @@ flowchart TD
     end
 
     subgraph AI["🤖 AI Vision Engine"]
-        Vision["Vision AI: DeepSeek / Gemini / Claude\n(3-read consensus: reading & confidence)"]
+        Vision["Vision AI: Gemini / Claude / DeepSeek\n(3-read consensus: reading & confidence)"]
         EpImage -->|Raw Image Bytes| Vision
-        Vision -->|MeterReading Schema| CoreBus
+        Vision -->|MeterReading Schema| CounterCheck
     end
 
     subgraph CoreBus["⚡ Decoupled Core Oracle Pipeline"]
-        EpSensor -->|MeterReading Schema| Hasher
-        CoreBus --> Hasher["Deterministic SHA-256 Canonical Hasher"]
+        EpSensor --> CounterCheck["Anti-Fraud Counter Check\n(current >= previous)"]
+        CounterCheck --> ThresholdEval["ESG Monthly Threshold Evaluation\n(consumption vs threshold)"]
+        ThresholdEval --> Hasher["Deterministic SHA-256 Canonical Hasher"]
         Hasher --> Web3["⛓ Solana Devnet Memo Program\n(Program ID: MemoSq4g...)"]
         Web3 --> Solscan["🔍 Solscan Devnet Explorer"]
-        Web3 --> TG["💬 Telegram Bot API\n(HTML ESG Audit Certificate)"]
-        TG --> Auditor["🏢 Compliance Auditor / ERP"]
+        Web3 --> TG["📱 Telegram Bot API (@Es0TrustBot)\n(HTML ESG Audit Certificate)"]
+        TG --> Auditor["🏢 Compliance Auditor / Stakeholder"]
     end
 ```
 
@@ -77,42 +96,51 @@ All modules communicate through strongly-typed Pydantic contracts located in `co
 ### 2. Web3 Oracle Proof (`core/web3_oracle.py`)
 ```json
 {
-  "data_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "tx_signature": "5KTpA8Xj9KzV2R3mFzYq...vM9X",
-  "solscan_url": "https://solscan.io/tx/5KTpA8Xj9KzV2R3mFzYq...vM9X?cluster=devnet",
-  "memo_payload": "EcoTrust:v1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "data_hash": "51fad600e9e2efb2e531b063aa6113e7e2d099bf523d8e70e5ae668a50554ee0",
+  "tx_signature": "42ZoJjLPsuWz95aJq4Ttzde8FLSPAnpQunuoYbsi1RTakTYdiajcZz5iKXihEkaNcVakUAAeCqJCN6sUWazm2hKD",
+  "solscan_url": "https://solscan.io/tx/42ZoJjLPsuWz95aJq4Ttzde8FLSPAnpQunuoYbsi1RTakTYdiajcZz5iKXihEkaNcVakUAAeCqJCN6sUWazm2hKD?cluster=devnet",
+  "memo_payload": "EcoTrust:v1:51fad600e9e2efb2e531b063aa6113e7e2d099bf523d8e70e5ae668a50554ee0:EXCEEDED",
   "network": "solana-devnet",
   "is_simulated": false
 }
 ```
 
-### 3. Orchestration Response (`main.py`)
+### 3. Orchestration Response with ESG Compliance (`main.py`)
 ```json
 {
   "status": "success",
   "reading": {
-    "value": 142.85,
+    "value": 1500.0,
     "unit": "kWh",
-    "confidence": 0.98,
-    "timestamp": "2026-11-08T01:15:31Z"
+    "confidence": 0.99,
+    "timestamp": "2026-11-08T15:42:46Z",
+    "source": "iot_sensor",
+    "device_id": "PLANT-BOILER-01"
   },
   "oracle_proof": {
-    "data_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "tx_signature": "5KTpA8Xj9KzV2R3m...",
-    "solscan_url": "https://solscan.io/tx/5KTpA8Xj9KzV2R3m...?cluster=devnet",
-    "memo_payload": "EcoTrust:v1:e3b0c442...",
-    "network": "solana-devnet",
-    "is_simulated": false
+    "data_hash": "51fad600e9e2efb2e531b063aa6113e7e2d099bf523d8e70e5ae668a50554ee0",
+    "tx_signature": "42ZoJjLPsuWz95aJq4Ttzde8FLSPAnpQunuoYbsi1RTakTYdiajcZz5iKXihEkaNcVakUAAeCqJCN6sUWazm2hKD",
+    "solscan_url": "https://solscan.io/tx/42ZoJjLPsuWz95aJq4Ttzde8FLSPAnpQunuoYbsi1RTakTYdiajcZz5iKXihEkaNcVakUAAeCqJCN6sUWazm2hKD?cluster=devnet",
+    "memo_payload": "EcoTrust:v1:51fad600e9e2efb2e531b063aa6113e7e2d099bf523d8e70e5ae668a50554ee0:EXCEEDED"
   },
   "notification": {
     "sent": true,
     "channel": "telegram",
-    "recipient": "123456789",
-    "message_id": 1024,
+    "recipient": "8869039555,8618670305,8501356357",
+    "message_id": "88,89,90",
     "is_mock": false,
     "error": null
   },
-  "execution_time_ms": 693.65
+  "consumption": 500.0,
+  "compliance": {
+    "threshold": 400.0,
+    "consumption": 500.0,
+    "is_breach": true,
+    "excess_percentage": 25.0,
+    "status": "EXCEEDED",
+    "detail": "El consumo de 500.0 kWh superó el umbral mensual esperado de 400.0 kWh (+25.0% sobreconsumo)."
+  },
+  "execution_time_ms": 4460.36
 }
 ```
 
@@ -122,13 +150,14 @@ All modules communicate through strongly-typed Pydantic contracts located in `co
 
 | Domain | Technology | Justification |
 |---|---|---|
-| **Runtime & Packaging** | Python 3.10+, `uv` | Blazing-fast virtual environment & dependency management |
+| **Runtime & Packaging** | Python 3.10+, `uv` | High-performance virtual environment & package management |
 | **Orchestration API** | FastAPI, Uvicorn | Async ASGI pipeline with OpenAPI interactive docs |
-| **AI Vision** | DeepSeek (`deepseek-flash`), Google Gemini (`gemini-3.6-flash`) or Anthropic Claude, auto-detected from the API key | Multimodal meter reading with strict JSON output and 3-read consensus |
-| **Web3 & Blockchain** | Solana Python SDK, `solders` | High-throughput, sub-second settlement on Solana Devnet |
-| **Smart Contract Layer** | Native Solana Memo Program | Zero smart contract gas fee waste; permanent on-chain audit log |
-| **Notifications** | Telegram Bot API (`requests`) | Instant operational delivery to compliance channels |
-| **Data Contracts** | Pydantic v2 & `pydantic-settings` | Runtime type safety and deterministic JSON serialization |
+| **AI Vision** | Google Gemini, Claude, DeepSeek | Multi-read majority consensus voting with structured JSON extraction |
+| **Web3 & Blockchain** | Solana Python SDK, `solders` | Sub-second Devnet finality and native Memo program anchoring |
+| **Smart Contract Layer** | Native Solana Memo Program | Zero contract maintenance overhead; permanent on-chain audit log |
+| **Notifications** | Telegram Bot API (`requests`, poller) | Real-time multi-chat broadcast with interactive bot commands (`@Es0TrustBot`) |
+| **Frontend** | Next.js 15, Tailwind CSS, Solana Wallet Adapter | Bilingual Landing Page + Audit Playground with On-Chain Verifier |
+| **Data Contracts** | Pydantic v2 & `pydantic-settings` | Runtime validation and deterministic canonical JSON serialization |
 
 ---
 
@@ -160,15 +189,13 @@ cp .env.example .env
 ```
 *(Leave empty or set `*_MOCK_FALLBACK=true` to test the complete pipeline offline without credentials!)*
 
-**Choosing the Vision AI:** paste a single key in `VISION_API_KEY`; the provider is detected from its prefix, no code changes needed.
+**AI Vision Key Detection**: paste a single key into `VISION_API_KEY` (or `GEMINI_API_KEY`). The provider is detected from its prefix automatically:
 
-| Key starts with | Provider | Default model |
+| Key Prefix | Provider | Default Model |
 |---|---|---|
-| `sk-` | DeepSeek | `deepseek-flash` |
-| `AIza` or `AQ.` | Google Gemini | `gemini-3.6-flash` |
-| `sk-ant-` | Anthropic Claude | `claude-opus-5-5` |
-
-Set `VISION_MODEL` to use another model from the same provider. While testing a real key, set `VISION_MOCK_FALLBACK=false` so API errors show up instead of the synthetic reading.
+| `AIza` or `AQ.` | Google Gemini | `gemini-flash-lite-latest` (native structured JSON) |
+| `sk-ant-` | Anthropic Claude | `claude-3-5-sonnet-20241022` |
+| `sk-` | DeepSeek | `deepseek-chat` |
 
 ### 4. Run the Backend Server
 ```bash
@@ -182,33 +209,39 @@ uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 uv run pytest -v
 ```
+*(All 81 unit, contract, integrity, and compliance tests pass in < 7s).*
 
-### 6. Run the Demo Dashboard (Next.js + Tailwind + Solana Wallet Adapter)
+### 6. Run the Bilingual Frontend (Landing Page + Audit Demo)
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000), connect Phantom/Solflare, and upload a meter photo or send sensor telemetry. The backend URL defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_API_URL` in `frontend/.env.local`.
-
-### 7. Monetization
-See [`X402.md`](X402.md) for the planned HTTP 402 pay-per-audit model (not yet implemented).
+Open [http://localhost:3000](http://localhost:3000) in your browser:
+* Explore the **Landing Page** with architectural walkthroughs and feature overviews.
+* Click **Launch App** to test the live audit engine (photo or IoT sensor mode).
+* Switch between **English (🇺🇸)** and **Spanish (🇲🇽)** instantly with the header toggle.
+* Connect **Phantom** or **Solflare** to sign as an identified auditor.
+* Use the **On-Chain Verifier** to independently confirm any Solana Devnet transaction hash.
 
 ---
 
 ## 📡 API Reference
 
 ### `POST /api/v1/audit-meter`
-**AI Vision Ingestion**: Accepts a photograph of an analog meter, extracts the reading with the configured Vision AI (DeepSeek, Gemini or Claude), anchors hash to Solana Devnet, and alerts Telegram.
+**AI Vision Ingestion**: Accepts a photograph of an analog or digital industrial meter, runs 3-read AI consensus, checks counter monotonicity, evaluates against monthly threshold, anchors to Solana Devnet, and alerts Telegram.
 * **Form Parameters**:
-  * `file`: (Required) Image file (`image/jpeg`, `image/png`).
+  * `file`: (Required) Image file (`image/jpeg`, `image/png`, `image/webp`, `image/heic`).
   * `meter_hint`: (Optional) Operator notes (e.g., `"Primary Boiler Flowmeter"`).
+  * `device_id`: (Optional) Meter / asset tag (e.g. `"BOILER-03"`).
+  * `previous_value`: (Optional) Previous counter reading to compute consumption and prevent fraud.
+  * `monthly_threshold`: (Optional) Expected monthly consumption threshold.
   * `telegram_chat_id`: (Optional) Recipient override for ESG certificate.
 
 ### `POST /api/v1/audit-sensor`
-**Direct IoT Telemetry Ingestion**: Bypasses computer vision. Accepts structured reading payloads directly from hardware sensors (Modbus, Arduino, RS-485, SCADA, connected PC), hashes the measurement, and anchors proof to Solana Devnet.
+**Direct IoT Telemetry Ingestion**: Direct structured reading payload from Modbus, SCADA, or IoT hardware. Computes net consumption, evaluates compliance threshold, and anchors proof directly to Solana Devnet.
 * **JSON Body**: `MeterReading` schema (`value`, `unit`, `confidence`, `timestamp`, `source`, `device_id`).
-* **Example Script**: See [`examples/iot_sensor_client.py`](examples/iot_sensor_client.py) for a working hardware client!
+* **Query Parameters**: `previous_value`, `monthly_threshold`.
 
 ### History, comparison and consumption limits
 Send a `device_id` with any audit and the reading is stored (SQLite, `DB_PATH`) and compared with that meter's previous reading: consumption, elapsed time, daily rate vs. typical rate. Readings that look altered (counter going backwards, unit change, abnormal jump) are **still anchored as evidence**, flagged in `comparison.anomaly` and alerted on Telegram.
