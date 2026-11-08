@@ -74,6 +74,9 @@ class Settings(BaseSettings):
         description="Enable mock console logging if Telegram credentials are not set",
     )
 
+    # Audit history (SQLite file, created on first use)
+    DB_PATH: str = Field(default="ecotrust.db", description="SQLite file holding audit history and consumption limits")
+
 
 @lru_cache()
 def get_settings() -> Settings:
