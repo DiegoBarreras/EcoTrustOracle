@@ -3,7 +3,12 @@ const DEFAULT_API =
     ? "http://localhost:8000"
     : "https://ecotrustoracle.onrender.com";
 
-export const API = (process.env.NEXT_PUBLIC_API_URL || DEFAULT_API).replace(/\/+$/, "");
+const rawApi = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API;
+export const API = rawApi
+  .trim()
+  .replace(/\/+$/, "")
+  .replace(/\/health$/, "")
+  .replace(/\/+$/, "");
 
 export type Reading = {
   value: number;
