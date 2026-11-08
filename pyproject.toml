@@ -1,0 +1,32 @@
+[project]
+name = "ecotrust-oracle"
+version = "1.0.0"
+description = "B2B SaaS Physical Oracle bridging industrial meters and Solana Devnet using Gemini 1.5 Flash Vision"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.9",
+    "requests>=2.31.0",
+    "google-generativeai>=0.7.0",
+    "solana>=0.34.0",
+    "solders>=0.21.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & secrets
+.env
+*.pem
+*.key
+id.json
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Temporary & workspace non-project files
+temp_check_repo/
+conciliacion/
+docsHerman/
+pms-backend/
+practicas/
+*.docx
+build_report.py
+GUIA_TEORICA_PMS.md
+requerimientos.md
