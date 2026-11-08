@@ -5,6 +5,7 @@ notifications to stakeholders via the Telegram Bot API using requests.
 """
 
 import asyncio
+import html
 import logging
 from typing import Dict, Any, Union, Optional
 import requests
@@ -20,14 +21,25 @@ class NotificationError(Exception):
     pass
 
 
+def _redact(text: Any, token: Optional[str] = None) -> str:
+    """Removes the bot token from any text (requests exceptions embed the /bot<TOKEN>/ URL)."""
+    out = str(text)
+    token = token if token is not None else get_settings().TELEGRAM_BOT_TOKEN
+    if token:
+        out = out.replace(token, "<redacted>")
+    return out
+
+
 def format_telegram_audit_message(
     reading: Union[MeterReading, Dict[str, Any]],
     solscan_url: str,
     data_hash: Optional[str] = None,
+    is_simulated: bool = False,
 ) -> str:
     """
-    Constructs a high-impact, professional ESG compliance certificate message
-    formatted in HTML for Telegram delivery.
+    Constructs the ESG compliance certificate message formatted in HTML for Telegram.
+    Every interpolated value is HTML-escaped. Simulated proofs carry no explorer link
+    and no on-chain claim.
     """
     if isinstance(reading, MeterReading):
         val = reading.value
@@ -44,25 +56,40 @@ def format_telegram_audit_message(
         source = reading.get("source", "ai_vision")
         device_id = reading.get("device_id")
 
-    conf_pct = f"{float(conf) * 100:.1f}%"
-    hash_short = f"{data_hash[:16]}...{data_hash[-8:]}" if data_hash else "Verified"
-    source_label = "🔌 Direct IoT Sensor" if source == "iot_sensor" else "📸 Gemini AI Vision"
-    asset_line = f"🏷 <b>Asset Tag:</b> <code>{device_id}</code>\n" if device_id else ""
+    def e(v: Any) -> str:
+        return html.escape(str(v), quote=False)
+
+    try:
+        conf_pct = f"{float(conf) * 100:.1f}%"
+    except (TypeError, ValueError):
+        conf_pct = "N/A"
+    source_label = "Sensor IoT directo" if source == "iot_sensor" else "Gemini AI Vision"
+    asset_line = f"<b>Activo:</b> <code>{e(device_id)}</code>\n" if device_id else ""
+    hash_line = f"<b>SHA-256:</b> <code>{e(data_hash)}</code>\n" if data_hash else ""
+
+    if is_simulated or not solscan_url:
+        anchor_block = (
+            "<b>Anclaje en Solana:</b> SIMULADO - no anclado en Solana\n"
+            "<i>Esta lectura no tiene prueba en la cadena.</i>"
+        )
+    else:
+        anchor_block = (
+            "<b>Anclaje en Solana Devnet:</b>\n"
+            f"<a href=\"{html.escape(solscan_url, quote=True)}\"><b>Ver prueba en Solscan</b></a>\n\n"
+            "<i>Estado: lectura anclada en Solana; verificable con el hash SHA-256.</i>"
+        )
 
     message = (
-        "🌿 <b>ECOTRUST ORACLE — ESG AUDIT CERTIFICATE</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 <b>Meter Reading:</b> <code>{val} {unit}</code>\n"
-        f"📡 <b>Source:</b> <code>{source_label}</code>\n"
+        "<b>ECOTRUST ORACLE - CERTIFICADO DE AUDITORIA ESG</b>\n"
+        "--------------------------------\n"
+        f"<b>Lectura:</b> <code>{e(val)} {e(unit)}</code>\n"
+        f"<b>Fuente:</b> <code>{e(source_label)}</code>\n"
         f"{asset_line}"
-        f"🎯 <b>Accuracy/Confidence:</b> <code>{conf_pct}</code>\n"
-        f"⏱ <b>Timestamp (UTC):</b> <code>{timestamp}</code>\n"
-        f"🔒 <b>SHA-256 Digest:</b> <code>{hash_short}</code>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⛓ <b>Solana Devnet Anchor:</b>\n"
-        f"👉 <a href=\"{solscan_url}\"><b>View Proof on Solscan</b></a>\n\n"
-        "✅ <i>Status: Tamper-proof physical audit verified on Solana.</i>\n"
-        "🏢 <i>B2B Corporate Compliance & ESG Reporting</i>"
+        f"<b>Confianza:</b> <code>{e(conf_pct)}</code>\n"
+        f"<b>Fecha (UTC):</b> <code>{e(timestamp)}</code>\n"
+        f"{hash_line}"
+        "--------------------------------\n"
+        f"{anchor_block}"
     )
     return message
 
@@ -95,6 +122,8 @@ async def send_audit_notification(
     solscan_url: str,
     data_hash: Optional[str] = None,
     chat_id: Optional[str] = None,
+    *,
+    is_simulated: bool = False,
 ) -> NotificationResult:
     """
     Asynchronously delivers the ESG audit notification via Telegram.
@@ -104,6 +133,7 @@ async def send_audit_notification(
         solscan_url: Blockchain explorer URL of the anchored memo.
         data_hash: Optional SHA-256 hash string for display.
         chat_id: Optional override for Telegram recipient chat ID.
+        is_simulated: True when the proof was never anchored (no Solscan link is shown).
 
     Returns:
         NotificationResult: Delivery status and Telegram message ID.
@@ -111,7 +141,7 @@ async def send_audit_notification(
     settings = get_settings()
     target_chat = chat_id or settings.TELEGRAM_CHAT_ID
     bot_token = settings.TELEGRAM_BOT_TOKEN
-    message_text = format_telegram_audit_message(reading, solscan_url, data_hash)
+    message_text = format_telegram_audit_message(reading, solscan_url, data_hash, is_simulated=is_simulated)
 
     # Check for missing credentials -> fallback to mock log
     if not bot_token or not target_chat:
@@ -141,8 +171,9 @@ async def send_audit_notification(
             delivered[cid] = res.get("result", {}).get("message_id")
             logger.info(f"✅ [Notifier] Telegram message delivered to {cid} (Message ID: {delivered[cid]})")
         except Exception as exc:
-            logger.error(f"❌ [Notifier] Telegram dispatch to {cid} failed: {exc}", exc_info=True)
-            failures[cid] = str(exc)
+            safe = _redact(exc, bot_token)
+            logger.error(f"[Notifier] Telegram dispatch to {cid} failed: {type(exc).__name__}: {safe}")
+            failures[cid] = safe
 
     error = "; ".join(f"{cid}: {err}" for cid, err in failures.items()) or None
     if delivered:
@@ -156,17 +187,9 @@ async def send_audit_notification(
             error=error,
         )
 
+    # Credentials are configured but nobody received it: a real failure, never a mock.
     error = error or "no valid chat IDs"
-    if settings.NOTIFIER_MOCK_FALLBACK:
-        return NotificationResult(
-            sent=True,
-            channel="telegram",
-            recipient=str(target_chat),
-            message_id=None,
-            is_mock=True,
-            error=error,
-        )
-    raise NotificationError(f"Failed to dispatch Telegram message: {error}")
+    raise NotificationError(_redact(f"Failed to dispatch Telegram message: {error}", bot_token))
 
 
 async def poll_telegram_commands(stop_event: asyncio.Event) -> None:
@@ -205,51 +228,52 @@ async def poll_telegram_commands(stop_event: asyncio.Event) -> None:
 
                 chat_id = msg.get("chat", {}).get("id")
                 text = (msg.get("text") or "").strip()
-                user_name = msg.get("from", {}).get("first_name", "Auditor")
+                user_name = html.escape(str(msg.get("from", {}).get("first_name", "Auditor")), quote=False)
+                safe_chat = html.escape(str(chat_id), quote=False)
 
                 if text.startswith("/start"):
                     reply = (
-                        f"🌿 <b>ECOTRUST ORACLE — ESG COMPLIANCE BOT</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"¡Hola <b>{user_name}</b>! 👋\n\n"
-                        f"Tu cuenta ha sido vinculada con éxito al Oráculo Físico de EcoTrust.\n"
-                        f"🆔 <b>Tu Chat ID:</b> <code>{chat_id}</code>\n\n"
-                        f"✅ A partir de ahora recibirás aquí los certificados de auditoría física "
-                        f"anclados de forma inmutable en <b>Solana Devnet</b> cada vez que se registre un medidor o sensor.\n\n"
-                        f"<b>Comandos:</b>\n"
-                        f"• /status — Verificar estado del oráculo y Solana\n"
-                        f"• /help — Guía rápida de uso"
+                        "<b>ECOTRUST ORACLE - BOT DE CUMPLIMIENTO ESG</b>\n"
+                        "--------------------------------\n"
+                        f"Hola <b>{user_name}</b>.\n\n"
+                        f"<b>Tu Chat ID:</b> <code>{safe_chat}</code>\n\n"
+                        "Para recibir certificados de auditoria, este Chat ID debe agregarse a "
+                        "TELEGRAM_CHAT_ID en la configuracion del oraculo. Hasta entonces no recibiras certificados.\n\n"
+                        "<b>Comandos:</b>\n"
+                        "/status - Estado del oraculo y Solana\n"
+                        "/help - Guia rapida de uso"
                     )
                     await asyncio.to_thread(_sync_telegram_send, bot_token, str(chat_id), reply)
-                    logger.info(f"✅ [Telegram Poller] Answered /start from {user_name} ({chat_id})")
+                    logger.info(f"[Telegram Poller] Answered /start from {user_name} ({chat_id})")
 
                 elif text.startswith("/status"):
                     reply = (
-                        f"🌿 <b>EcoTrust Oracle — Estado Operativo</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"⚡ <b>Blockchain:</b> Solana Devnet\n"
-                        f"🔒 <b>Memo Program:</b> <code>MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr</code>\n"
-                        f"🤖 <b>AI Vision:</b> Multi-Provider (Gemini / Claude / DeepSeek)\n"
-                        f"🟢 <b>API Gateway:</b> Operacional (FastAPI)\n"
-                        f"🌐 <b>Dashboard:</b> http://localhost:3000"
+                        "<b>EcoTrust Oracle - Estado Operativo</b>\n"
+                        "--------------------------------\n"
+                        "<b>Blockchain:</b> Solana Devnet\n"
+                        f"<b>Memo Program:</b> <code>{html.escape(settings.SOLANA_MEMO_PROGRAM_ID, quote=False)}</code>\n"
+                        "<b>AI Vision:</b> Multi-Provider (Gemini / Claude / DeepSeek)\n"
+                        "<b>API Gateway:</b> Operacional (FastAPI)\n"
+                        "<b>Dashboard:</b> http://localhost:3000"
                     )
                     await asyncio.to_thread(_sync_telegram_send, bot_token, str(chat_id), reply)
-                    logger.info(f"✅ [Telegram Poller] Answered /status from {chat_id}")
+                    logger.info(f"[Telegram Poller] Answered /status from {chat_id}")
 
                 elif text.startswith("/help"):
                     reply = (
-                        f"ℹ️ <b>EcoTrust Oracle — Ayuda</b>\n\n"
-                        f"1. Abre el dashboard web en <code>http://localhost:3000</code>.\n"
-                        f"2. Conecta tu billetera de Solana (Phantom / Solflare).\n"
-                        f"3. Sube la foto de un medidor industrial o introduce datos de sensor IoT.\n"
-                        f"4. Haz clic en 'Auditar'. Recibirás el certificado con link de Solscan aquí mismo en segundos."
+                        "<b>EcoTrust Oracle - Ayuda</b>\n\n"
+                        "1. Abre el dashboard web en <code>http://localhost:3000</code>.\n"
+                        "2. Conecta tu billetera de Solana (Phantom / Solflare).\n"
+                        "3. Sube la foto de un medidor industrial o introduce datos de sensor IoT.\n"
+                        "4. Haz clic en Auditar. Si tu Chat ID esta en TELEGRAM_CHAT_ID, "
+                        "recibiras aqui el certificado con el hash y el enlace de Solscan."
                     )
                     await asyncio.to_thread(_sync_telegram_send, bot_token, str(chat_id), reply)
 
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.warning(f"⚠️ [Telegram Poller] Warning during update poll: {exc}")
+            logger.warning(f"[Telegram Poller] Warning during update poll: {type(exc).__name__}: {_redact(exc, bot_token)}")
             await asyncio.sleep(2.0)
 
         await asyncio.sleep(0.5)

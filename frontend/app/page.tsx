@@ -1,174 +1,270 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type InputHTMLAttributes } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { API, apiPost, ApiError, short, type AuditResponse, type Conflict } from "./api";
+import { Pipeline, type Stage } from "./Pipeline";
+import { Banner, ResultCard } from "./ResultCard";
+import { VerifyPanel } from "./VerifyPanel";
 
 // Wallet button renders differently server vs. client; load it client-only to avoid hydration errors.
-const WalletMultiButton = dynamic(
-  async () => (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
-  { ssr: false },
-);
+const WalletMultiButton = dynamic(async () => (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton, { ssr: false });
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+type Tab = "meter" | "sensor" | "verify";
+const TABS: [Tab, string][] = [
+  ["meter", "Foto de medidor"],
+  ["sensor", "Sensor IoT"],
+  ["verify", "Verificar"],
+];
+const MAX_BYTES = 10 * 1024 * 1024;
+const STAGE_INDEX: Partial<Record<Stage, number>> = { vision: 1, anchor: 2, notify: 3 };
+const estimate = (s: number, flow: "meter" | "sensor"): Stage =>
+  flow === "meter" ? (s < 8 ? "vision" : s < 12 ? "anchor" : "notify") : s < 3 ? "anchor" : "notify";
 
-type AuditResponse = {
-  status: string;
-  reading: { value: number; unit: string; confidence: number; timestamp: string; source: string };
-  oracle_proof: { data_hash: string; solscan_url: string; tx_signature: string; is_simulated: boolean };
-  notification: { sent: boolean; is_mock: boolean; error: string | null };
-  execution_time_ms: number;
-  vision?: {
-    model: string;
-    meter_type: string | null;
-    obstruction_ratio: number | null;
-    votes: number;
-    total_reads: number;
-    is_mock: boolean;
-  } | null;
-};
+const field = "w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none";
+const labelCls = "mb-1 block text-sm font-medium text-slate-200";
 
-const METER_TYPES: Record<string, string> = {
-  multi_dial: "Diales circulares",
-  cyclometer: "Rodillos (odómetro)",
-  seven_segment: "Display digital",
-  needle_gauge: "Manómetro de aguja",
-  other: "Otro",
-};
-
-const input = "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm";
-const button = "rounded-md bg-emerald-500 px-4 py-2 font-semibold text-slate-950 disabled:opacity-40";
+function Field({ id, label, ...props }: { id: string; label: string } & InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <div>
+      <label htmlFor={id} className={labelCls}>{label}</label>
+      <input id={id} name={id} className={field} {...props} />
+    </div>
+  );
+}
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const { publicKey } = useWallet();
-  const auditor = publicKey?.toBase58();
-  const [mode, setMode] = useState<"meter" | "sensor">("meter");
-  const [busy, setBusy] = useState(false);
+  const auditor = mounted ? publicKey?.toBase58() : undefined;
+
+  const [tab, setTab] = useState<Tab>("meter");
+  const [flow, setFlow] = useState<"meter" | "sensor">("meter");
+  const [stage, setStage] = useState<Stage>("idle");
+  const [failedAt, setFailedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<Conflict | null>(null);
   const [result, setResult] = useState<AuditResponse | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [verifyJson, setVerifyJson] = useState("");
+  const [verifyTx, setVerifyTx] = useState("");
 
+  const busy = stage === "vision" || stage === "anchor" || stage === "notify";
+
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  // Timed estimate of the stage while the single request runs.
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    if (!busy) return;
+    const t = setInterval(() => {
+      const s = (Date.now() - startRef.current) / 1000;
+      setElapsed(Math.floor(s));
+      const next = estimate(s, flow);
+      setStage((cur) => (cur === "vision" || cur === "anchor" || cur === "notify" ? next : cur));
+    }, 250);
+    return () => clearInterval(t);
+  }, [busy, flow]);
 
-  const isAuditorReady = mounted && Boolean(auditor);
+  function pickFile(f: File | null) {
+    setError(null);
+    if (f && f.size > MAX_BYTES) {
+      setError(`La foto pesa ${(f.size / 1024 / 1024).toFixed(1)} MB; el máximo es 10 MB.`);
+      f = null;
+    }
+    setFile(f);
+    setPreview(f ? URL.createObjectURL(f) : null);
+  }
+
+  function selectTab(t: Tab) {
+    setTab(t);
+    if (t !== "verify" && !busy) setFlow(t);
+  }
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (busy) return;
     const form = new FormData(e.currentTarget);
-    setBusy(true);
+    const prev = String(form.get("previous_value") ?? "").trim();
+    const mode = tab === "sensor" ? "sensor" : "meter";
+    if (mode === "meter" && !file) {
+      setError("Primero toma o sube una foto del medidor.");
+      return;
+    }
+    setFlow(mode);
     setError(null);
+    setConflict(null);
     setResult(null);
+    setFailedAt(null);
+    setElapsed(0);
+    startRef.current = Date.now();
+    setStage(mode === "meter" ? "vision" : "anchor");
     try {
-      let res: Response;
+      let res: AuditResponse;
       if (mode === "meter") {
-        form.set("meter_hint", `${form.get("meter_hint") ?? ""} | auditor: ${auditor}`.trim());
-        res = await fetch(`${API}/api/v1/audit-meter`, { method: "POST", body: form });
+        const body = new FormData();
+        body.set("file", file as File);
+        for (const k of ["meter_hint", "device_id"]) {
+          const v = String(form.get(k) ?? "").trim();
+          if (v) body.set(k, v);
+        }
+        if (prev) body.set("previous_value", prev);
+        res = await apiPost<AuditResponse>("/api/v1/audit-meter", { body });
       } else {
-        res = await fetch(`${API}/api/v1/audit-sensor`, {
-          method: "POST",
+        const qs = prev ? `?previous_value=${encodeURIComponent(prev)}` : "";
+        res = await apiPost<AuditResponse>(`/api/v1/audit-sensor${qs}`, {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             value: Number(form.get("value")),
-            unit: form.get("unit"),
+            unit: String(form.get("unit") ?? "").trim(),
             confidence: Number(form.get("confidence")),
             timestamp: new Date().toISOString(),
             source: "iot_sensor",
-            device_id: form.get("device_id") || auditor,
+            device_id: String(form.get("device_id") ?? "").trim() || auditor || null,
           }),
         });
       }
-      const body = await res.json();
-      if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
-      setResult(body);
+      setResult(res);
+      setStage("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
+      const at = estimate((Date.now() - startRef.current) / 1000, mode);
+      setFailedAt(err instanceof ApiError && err.conflict ? 2 : (STAGE_INDEX[at] ?? 1));
+      setStage("error");
+      if (err instanceof ApiError && err.conflict) setConflict(err.conflict);
+      else setError(err instanceof Error && err.message ? err.message : "Error desconocido");
     }
   }
 
+  function verifyLast() {
+    if (!result) return;
+    setVerifyJson(JSON.stringify(result.reading, null, 2));
+    setVerifyTx(result.oracle_proof.tx_signature);
+    setTab("verify");
+  }
+
+  const submitBtn =
+    "w-full rounded-md bg-emerald-500 px-4 py-3 text-base font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-300";
+
   return (
-    <main className="mx-auto max-w-2xl space-y-6 p-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">🌿 EcoTrust Oracle</h1>
-        {mounted ? (
-          <WalletMultiButton />
-        ) : (
-          <div className="h-10 w-36 rounded-md bg-slate-800 animate-pulse" />
-        )}
+    <main className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold md:text-3xl">
+            EcoTrust <span className="text-emerald-400">Oracle</span>
+          </h1>
+          <p className="mt-1 text-slate-300">Foto de un medidor &rarr; la IA lo lee 3 veces &rarr; la huella queda en Solana</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          {mounted ? <WalletMultiButton /> : <div className="h-12 w-40 animate-pulse rounded-md bg-slate-800" />}
+          <p className="text-xs text-slate-400">{auditor ? `Auditor: ${short(auditor, 4)}` : "Billetera opcional"}</p>
+        </div>
       </header>
 
-      <div className="flex gap-2">
-        {(["meter", "sensor"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            className={`rounded-md px-3 py-1 text-sm ${mode === m ? "bg-emerald-500 text-slate-950" : "bg-slate-800"}`}
-          >
-            {m === "meter" ? "📸 Foto de medidor" : "🔌 Sensor IoT"}
-          </button>
-        ))}
-      </div>
+      <Pipeline stage={stage} failedAt={failedAt} sensor={flow === "sensor"} elapsed={elapsed} />
 
-      <form key={mode} onSubmit={submit} className="space-y-3 rounded-lg bg-slate-900 p-4">
-        {mode === "meter" ? (
-          <>
-            <input name="file" type="file" accept="image/*" capture="environment" required className={input} />
-            <input name="meter_hint" placeholder="Nota (ej: Caldera principal)" className={input} />
-          </>
-        ) : (
-          <>
-            <input name="value" type="number" step="any" placeholder="Valor" required className={input} />
-            <input name="unit" placeholder="Unidad (kWh, m3...)" required className={input} />
-            <input name="confidence" type="number" step="0.01" min="0" max="1" defaultValue="1" required className={input} />
-            <input name="device_id" placeholder="ID del dispositivo (opcional)" className={input} />
-          </>
-        )}
-        <button disabled={!isAuditorReady || busy} className={button}>
-          {busy ? "Anclando en Solana…" : isAuditorReady ? "Auditar" : "Conecta tu billetera para auditar"}
-        </button>
-      </form>
-
-      {error && <p className="rounded-md bg-red-950 p-3 text-sm text-red-300">{error}</p>}
-
-      {result && (
-        <section className="space-y-2 rounded-lg bg-slate-900 p-4 text-sm">
-          <p className="text-3xl font-bold text-emerald-400">
-            {result.reading.value} {result.reading.unit}
-          </p>
-          <p>Confianza: {(result.reading.confidence * 100).toFixed(1)}%</p>
-          {result.vision &&
-            (result.vision.is_mock ? (
-              <p className="rounded-md bg-amber-950 p-2 text-amber-300">
-                ⚠️ Lectura simulada: el servidor no tiene clave de IA configurada.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 gap-2 rounded-md bg-slate-800 p-3">
-                <p>🤖 Modelo: <code>{result.vision.model}</code></p>
-                <p>🔎 Tipo: {METER_TYPES[result.vision.meter_type ?? ""] ?? result.vision.meter_type ?? "—"}</p>
-                <p>
-                  🗳 Consenso: {result.vision.votes}/{result.vision.total_reads} lecturas coinciden
-                </p>
-                <p>
-                  🌫 Obstrucción:{" "}
-                  {result.vision.obstruction_ratio == null ? "—" : `${(result.vision.obstruction_ratio * 100).toFixed(0)}%`}
-                </p>
-              </div>
+      <div className="grid gap-5 md:grid-cols-2">
+        <div className="space-y-4">
+          <div className="flex gap-1 rounded-lg bg-slate-900 p-1" role="group" aria-label="Modo">
+            {TABS.map(([t, label]) => (
+              <button
+                key={t}
+                type="button"
+                aria-pressed={tab === t}
+                onClick={() => selectTab(t)}
+                className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ${tab === t ? "bg-emerald-500 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+              >
+                {label}
+              </button>
             ))}
-          <p className="break-all">
-            SHA-256: <code>{result.oracle_proof.data_hash}</code>
-          </p>
-          <p>
-            Telegram: {result.notification.sent ? (result.notification.is_mock ? "simulado" : "enviado") : "falló"}
-            {result.oracle_proof.is_simulated && " · ancla simulada (sin SOL/RPC)"}
-          </p>
-          <a href={result.oracle_proof.solscan_url} target="_blank" rel="noreferrer" className={`${button} inline-block`}>
-            Ver en Solscan Devnet ↗
-          </a>
-        </section>
-      )}
+          </div>
+
+          {tab === "verify" ? (
+            <VerifyPanel readingJson={verifyJson} txSig={verifyTx} onReadingJson={setVerifyJson} onTxSig={setVerifyTx} />
+          ) : (
+            <form key={tab} onSubmit={submit} className="space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-5">
+              {tab === "meter" ? (
+                <>
+                  <label
+                    htmlFor="file"
+                    className="flex min-h-40 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-emerald-500/60 bg-slate-950 p-4 text-center hover:border-emerald-400"
+                  >
+                    {preview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={preview} alt="Vista previa del medidor" className="max-h-64 rounded-md object-contain" />
+                    ) : (
+                      <svg viewBox="0 0 24 24" className="h-10 w-10 text-emerald-400" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                        <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
+                        <circle cx="12" cy="13" r="3.5" />
+                      </svg>
+                    )}
+                    <span className="text-base font-semibold text-emerald-300">{preview ? "Cambiar foto" : "Tomar o subir foto"}</span>
+                    <span className="text-xs text-slate-400">JPEG, PNG, WebP o HEIC, máximo 10 MB</span>
+                  </label>
+                  <input
+                    id="file"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                    capture="environment"
+                    className="sr-only"
+                    onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                  />
+                  <Field id="meter_hint" label="Nota (opcional)" placeholder="Ej: Caldera principal" />
+                  <Field id="device_id" label="ID del medidor (opcional)" maxLength={128} placeholder="Ej: MED-001" />
+                  <Field id="previous_value" label="Lectura anterior (opcional)" type="number" step="any" placeholder="Para calcular consumo" />
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field id="value" label="Valor" type="number" step="any" required />
+                    <Field id="unit" label="Unidad" required placeholder="kWh, m3..." />
+                  </div>
+                  <Field id="confidence" label="Confianza (0 a 1)" type="number" step="0.01" min="0" max="1" defaultValue="1" required />
+                  <Field id="device_id" label="ID del dispositivo" maxLength={128} placeholder={auditor ? `Por defecto: ${short(auditor, 4)}` : "Ej: SENSOR-07"} />
+                  <Field id="previous_value" label="Lectura anterior (opcional)" type="number" step="any" />
+                </>
+              )}
+              <button type="submit" disabled={busy || (tab === "meter" && !file)} className={submitBtn}>
+                {busy ? `Procesando... ${elapsed} s` : tab === "meter" && !file ? "Sube una foto para auditar" : "Auditar y anclar en Solana"}
+              </button>
+            </form>
+          )}
+        </div>
+
+        <div className="space-y-4" aria-live="polite">
+          {conflict && (
+            <div className="rounded-xl border-2 border-red-500 bg-red-950/70 p-5 text-red-100">
+              <p className="text-lg font-bold">Alerta: posible fraude o lectura errónea</p>
+              <p className="mt-2 text-sm">
+                La nueva lectura (<strong>{conflict.value}</strong>) es menor que la anterior (<strong>{conflict.previous_value}</strong>). Un contador no
+                puede retroceder, así que <strong>no se ancló en Solana</strong>.
+              </p>
+              {conflict.message && <p className="mt-2 text-xs text-red-200">{conflict.message}</p>}
+            </div>
+          )}
+          {error && <Banner tone="red">{error}</Banner>}
+          {result ? (
+            <ResultCard result={result} onVerify={verifyLast} />
+          ) : (
+            !conflict &&
+            !error && (
+              <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-6 text-sm text-slate-300">
+                <p className="text-base font-semibold text-slate-100">Aún no hay auditorías</p>
+                <p className="mt-2">
+                  {busy
+                    ? "Procesando la auditoría..."
+                    : "Sube la foto de un medidor o envía la lectura de un sensor. Aquí verás el valor leído, la confianza de la IA y la prueba anclada en Solana."}
+                </p>
+                <p className="mt-3 text-xs text-slate-400">Backend: {API}</p>
+              </div>
+            )
+          )}
+        </div>
+      </div>
     </main>
   );
 }

@@ -3,18 +3,22 @@ EcoTrust Oracle - FastAPI Central Orchestrator
 B2B SaaS Physical Oracle bridging real-world industrial meters and the Solana Blockchain.
 
 Sequential Pipeline:
-1. Vision Agent (Gemini 1.5 Flash) -> Extracts meter reading into validated JSON.
-2. Web3 Oracle (Solana Devnet)     -> Hashes payload (SHA-256) & anchors via Memo program.
-3. Notifier (Telegram Bot API)     -> Delivers immutable ESG certificate to stakeholders.
+1. Vision Agent (Gemini / Claude / DeepSeek) -> Extracts meter reading into validated JSON (3-read consensus).
+2. Web3 Oracle (Solana Devnet)              -> Hashes payload (SHA-256) & anchors via Memo program.
+3. Notifier (Telegram Bot API)              -> Delivers ESG certificate to stakeholders.
 """
 
+import math
 import time
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -23,9 +27,13 @@ from core.schemas import (
     MeterReading,
     AuditResponse,
     HealthResponse,
+    NotificationResult,
+    VerifyRequest,
+    VerifyResult,
+    VisionAnalysis,
 )
 from core.vision_agent import analyze_meter_image, VisionExtractionError
-from core.web3_oracle import anchor_reading_to_solana, SolanaOracleError
+from core.web3_oracle import anchor_reading_to_solana, verify_anchor, SolanaOracleError
 from core.notifier import send_audit_notification, NotificationError, poll_telegram_commands
 
 # Configure structured logging
@@ -35,16 +43,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ecotrust.orchestrator")
 
+# Formats every supported vision provider accepts; SVG and other "image/*" types are rejected.
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+# Inline image data is capped by the providers (~20 MB after base64) and sent 3 times for consensus.
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle management."""
     settings = get_settings()
     logger.info("==================================================")
-    logger.info(f"🌿 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
-    logger.info(f"⚡ Solana RPC: {settings.SOLANA_RPC_URL}")
-    logger.info(f"🤖 Vision model: {'Configured' if settings.VISION_API_KEY else 'MOCK Fallback'}")
-    logger.info(f"💬 Telegram Bot: {'Configured' if settings.TELEGRAM_BOT_TOKEN else 'MOCK Fallback'}")
+    logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info(f"Solana RPC: {settings.SOLANA_RPC_URL}")
+    logger.info(f"Vision model: {'Configured' if settings.VISION_API_KEY else 'MOCK Fallback'}")
+    logger.info(f"Telegram Bot: {'Configured' if settings.TELEGRAM_BOT_TOKEN else 'MOCK Fallback'}")
     logger.info("==================================================")
 
     stop_event = asyncio.Event()
@@ -54,7 +67,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("🛑 Shutting down EcoTrust Oracle Orchestrator...")
+    logger.info("Shutting down EcoTrust Oracle Orchestrator...")
     if poller_task:
         stop_event.set()
         poller_task.cancel()
@@ -71,8 +84,8 @@ app = FastAPI(
     version=settings.APP_VERSION,
     description=(
         "Physical Oracle bridging physical industrial meters and Solana Devnet. "
-        "Extracts readings via Gemini 1.5 Flash Vision, generates deterministic SHA-256 hashes, "
-        "anchors on-chain via the native Solana Memo Program, and delivers instant Telegram ESG certificates."
+        "Extracts readings with a vision model (3 independent reads + majority vote), generates deterministic "
+        "SHA-256 hashes, anchors on-chain via the native Solana Memo Program, and delivers Telegram ESG certificates."
     ),
     lifespan=lifespan,
 )
@@ -87,6 +100,13 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    # The default handler echoes the rejected input; NaN/Infinity cannot be JSON-encoded and turned a 422 into a 500.
+    errors = [{k: v for k, v in err.items() if k not in ("input", "ctx")} for err in exc.errors()]
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": jsonable_encoder(errors)})
+
+
 @app.get("/", tags=["System"])
 async def root():
     """Service metadata and documentation pointers."""
@@ -97,28 +117,105 @@ async def root():
         "docs_url": "/docs",
         "health_url": "/health",
         "audit_endpoint": "/api/v1/audit-meter",
+        "verify_endpoint": "/api/v1/verify",
     }
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
     """
-    Evaluates system integration readiness:
-    - Gemini Vision configuration
-    - Solana Devnet RPC accessibility
-    - Telegram Notifier credentials
+    Reports which integrations are REALLY configured (mock fallbacks do not count as ready):
+    - vision API key present
+    - oracle wallet configured (SOLANA_PRIVATE_KEY or oracle-devnet.json)
+    - Telegram bot token and chat IDs present
     """
-    gemini_ready = bool(settings.VISION_API_KEY) or settings.VISION_MOCK_FALLBACK
-    solana_ready = True  # RPC fallback handles connectivity
-    telegram_ready = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID) or settings.NOTIFIER_MOCK_FALLBACK
-
     return HealthResponse(
         status="ok",
         version=settings.APP_VERSION,
-        gemini_ready=gemini_ready,
-        solana_ready=solana_ready,
-        telegram_ready=telegram_ready,
+        gemini_ready=bool(settings.VISION_API_KEY),
+        solana_ready=bool(settings.SOLANA_PRIVATE_KEY) or Path("oracle-devnet.json").exists(),
+        telegram_ready=bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID),
         network="solana-devnet",
+    )
+
+
+def _check_counter(value: float, previous_value: Optional[float]) -> Optional[float]:
+    """
+    Meters are cumulative counters: consumption = current - previous reading.
+    A reading below the previous one is a misread or tampering, so it is refused before anchoring.
+    """
+    if previous_value is None:
+        return None
+    if not math.isfinite(previous_value):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="previous_value must be a finite number")
+    if value < previous_value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "reading_below_previous",
+                "message": (
+                    f"La lectura {value} es menor que la anterior {previous_value}. "
+                    "Un medidor acumulativo no retrocede: posible error de lectura o manipulacion. No se anclo en Solana."
+                ),
+                "previous_value": previous_value,
+                "value": value,
+            },
+        )
+    return round(value - previous_value, 4)
+
+
+async def _anchor_and_notify(
+    reading: MeterReading,
+    start_time: float,
+    telegram_chat_id: Optional[str],
+    vision: Optional[VisionAnalysis] = None,
+    consumption: Optional[float] = None,
+    force_simulated: bool = False,
+) -> AuditResponse:
+    """Shared tail of every audit: anchor on Solana, notify Telegram, build the response."""
+    try:
+        logger.info(f"[Pipeline] Anchoring reading on Solana Devnet: {reading.value} {reading.unit}")
+        oracle_proof = await anchor_reading_to_solana(reading, force_simulated=force_simulated)
+    except SolanaOracleError as err:
+        logger.error(f"Web3 Oracle failed: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Solana Devnet anchoring error: {err}",
+        )
+
+    audit_status = "success"
+    try:
+        logger.info("[Pipeline] Sending ESG audit notification to Telegram...")
+        notification = await send_audit_notification(
+            reading=reading,
+            solscan_url=oracle_proof.solscan_url,
+            data_hash=oracle_proof.data_hash,
+            chat_id=telegram_chat_id,
+            is_simulated=oracle_proof.is_simulated,
+        )
+    except NotificationError as err:
+        # Partial success: the proof exists even though the alert was not delivered.
+        logger.warning(f"Notification error: {err}")
+        audit_status = "partial_success"
+        notification = NotificationResult(
+            sent=False,
+            channel="telegram",
+            recipient=telegram_chat_id or settings.TELEGRAM_CHAT_ID,
+            message_id=None,
+            is_mock=False,
+            error=str(err),
+        )
+
+    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    logger.info(f"[Pipeline Complete] {audit_status} in {elapsed_ms}ms")
+    return AuditResponse(
+        status=audit_status,
+        reading=reading,
+        oracle_proof=oracle_proof,
+        notification=notification,
+        execution_time_ms=elapsed_ms,
+        vision=vision,
+        consumption=consumption,
     )
 
 
@@ -129,42 +226,39 @@ async def health_check():
     tags=["Oracle Audit"],
     summary="Full Physical-to-Blockchain Audit Pipeline",
     description=(
-        "Uploads a meter photograph, extracts numerical readings using Gemini 1.5 Flash Vision, "
+        "Uploads a meter photograph, extracts the reading with a vision model (3 independent reads + majority vote), "
         "computes a deterministic SHA-256 hash, anchors proof on Solana Devnet via the Memo program, "
-        "and dispatches an ESG compliance certificate to Telegram."
+        "and dispatches an ESG compliance certificate to Telegram. "
+        "If previous_value is sent and the new reading is lower, nothing is anchored (409)."
     ),
 )
 async def audit_meter(
-    file: UploadFile = File(..., description="High-resolution photograph of the industrial meter dial/screen"),
-    meter_hint: Optional[str] = Form(None, description="Optional context (e.g. 'Main boiler gas flowmeter')"),
+    file: UploadFile = File(..., description="Photograph of the industrial meter (jpeg, png, webp, heic; max 10 MB)"),
+    meter_hint: Optional[str] = Form(None, max_length=500, description="Optional context (e.g. 'Main boiler gas flowmeter')"),
+    device_id: Optional[str] = Form(None, max_length=128, description="Meter / asset tag (e.g. 'BOILER-03')"),
+    previous_value: Optional[float] = Form(None, description="Previous counter reading of this meter, to compute consumption"),
     telegram_chat_id: Optional[str] = Form(None, description="Optional Telegram chat ID override for alerts"),
 ):
     start_time = time.perf_counter()
 
-    # Validate file type
-    content_type = file.content_type or "image/jpeg"
-    if not content_type.startswith("image/"):
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file type '{content_type}'. Please upload an image file (e.g. image/jpeg, image/png).",
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type '{content_type}'. Upload a JPEG, PNG, WEBP or HEIC photo.",
+        )
+
+    image_bytes = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty (0 bytes).")
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Image is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB.",
         )
 
     try:
-        image_bytes = await file.read()
-        if len(image_bytes) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded file is empty (0 bytes).",
-            )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read image stream: {exc}",
-        )
-
-    # Step 1: AI Vision Extraction (Developer 1 Module)
-    try:
-        logger.info(f"📸 [Pipeline Step 1/3] Processing meter image '{file.filename}' ({len(image_bytes)} bytes)")
+        logger.info(f"[Pipeline] Processing meter image '{file.filename}' ({len(image_bytes)} bytes)")
         reading, vision = await analyze_meter_image(
             image_bytes=image_bytes,
             mime_type=content_type,
@@ -177,56 +271,13 @@ async def audit_meter(
             detail=f"AI Vision extraction error: {err}",
         )
 
-    # Step 2: Web3 Cryptographic Anchoring (Developer 2 Module)
-    try:
-        logger.info(f"⛓ [Pipeline Step 2/3] Anchoring reading on Solana Devnet: {reading.value} {reading.unit}")
-        oracle_proof = await anchor_reading_to_solana(reading)
-    except SolanaOracleError as err:
-        logger.error(f"Web3 Oracle failed: {err}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Solana Devnet anchoring error: {err}",
-        )
+    if device_id and device_id.strip():
+        reading.device_id = device_id.strip()
+    consumption = _check_counter(reading.value, previous_value)
 
-    # Step 3: Telegram Notification Dispatch (Developer 3 Module)
-    try:
-        logger.info(f"📨 [Pipeline Step 3/3] Sending ESG audit notification to Telegram...")
-        notification = await send_audit_notification(
-            reading=reading,
-            solscan_url=oracle_proof.solscan_url,
-            data_hash=oracle_proof.data_hash,
-            chat_id=telegram_chat_id,
-        )
-    except NotificationError as err:
-        logger.warning(f"Notification error: {err}")
-        # Partial success: The on-chain proof was still created!
-        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        return AuditResponse(
-            status="partial_success",
-            reading=reading,
-            oracle_proof=oracle_proof,
-            notification={
-                "sent": False,
-                "channel": "telegram",
-                "recipient": telegram_chat_id or settings.TELEGRAM_CHAT_ID,
-                "message_id": None,
-                "is_mock": False,
-                "error": str(err),
-            },
-            execution_time_ms=elapsed_ms,
-            vision=vision,
-        )
-
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-    logger.info(f"🏁 [Pipeline Complete] Audit finished successfully in {elapsed_ms}ms")
-
-    return AuditResponse(
-        status="success",
-        reading=reading,
-        oracle_proof=oracle_proof,
-        notification=notification,
-        execution_time_ms=elapsed_ms,
-        vision=vision,
+    # A synthetic reading (no vision key configured) is never written to the chain.
+    return await _anchor_and_notify(
+        reading, start_time, telegram_chat_id, vision=vision, consumption=consumption, force_simulated=vision.is_mock
     )
 
 
@@ -239,11 +290,13 @@ async def audit_meter(
     description=(
         "Receives meter measurements directly from connected hardware sensors "
         "(Modbus, Arduino, Raspberry Pi, SCADA, USB/Serial), hashes the canonical reading, "
-        "and anchors proof directly to Solana Devnet without requiring camera image processing."
+        "and anchors proof directly to Solana Devnet without requiring camera image processing. "
+        "If previous_value is sent and the new reading is lower, nothing is anchored (409)."
     ),
 )
 async def audit_sensor(
     reading: MeterReading,
+    previous_value: Optional[float] = None,
     telegram_chat_id: Optional[str] = None,
 ):
     """
@@ -252,7 +305,7 @@ async def audit_sensor(
     """
     start_time = time.perf_counter()
     logger.info(
-        f"🔌 [Sensor Ingest] Received telemetry from device '{reading.device_id or 'anonymous'}': "
+        f"[Sensor Ingest] Received telemetry from device '{reading.device_id or 'anonymous'}': "
         f"{reading.value} {reading.unit} (source: {reading.source})"
     )
 
@@ -260,52 +313,8 @@ async def audit_sensor(
     if reading.source == "ai_vision":
         reading.source = "iot_sensor"
 
-    # Step 1: Web3 Cryptographic Anchoring (Developer 2 Module)
-    try:
-        oracle_proof = await anchor_reading_to_solana(reading)
-    except SolanaOracleError as err:
-        logger.error(f"Web3 Oracle failed: {err}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Solana Devnet anchoring error: {err}",
-        )
-
-    # Step 2: Telegram Notification Dispatch (Developer 3 Module)
-    try:
-        notification = await send_audit_notification(
-            reading=reading,
-            solscan_url=oracle_proof.solscan_url,
-            data_hash=oracle_proof.data_hash,
-            chat_id=telegram_chat_id,
-        )
-    except NotificationError as err:
-        logger.warning(f"Notification error: {err}")
-        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        return AuditResponse(
-            status="partial_success",
-            reading=reading,
-            oracle_proof=oracle_proof,
-            notification={
-                "sent": False,
-                "channel": "telegram",
-                "recipient": telegram_chat_id or settings.TELEGRAM_CHAT_ID,
-                "message_id": None,
-                "is_mock": False,
-                "error": str(err),
-            },
-            execution_time_ms=elapsed_ms,
-        )
-
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-    logger.info(f"🏁 [Sensor Pipeline Complete] Telemetry anchored in {elapsed_ms}ms")
-
-    return AuditResponse(
-        status="success",
-        reading=reading,
-        oracle_proof=oracle_proof,
-        notification=notification,
-        execution_time_ms=elapsed_ms,
-    )
+    consumption = _check_counter(reading.value, previous_value)
+    return await _anchor_and_notify(reading, start_time, telegram_chat_id, consumption=consumption)
 
 
 @app.post(
@@ -314,11 +323,11 @@ async def audit_sensor(
     status_code=status.HTTP_201_CREATED,
     tags=["Oracle Audit"],
     summary="Mock Pipeline Execution (No Image Required)",
-    description="Allows rapid frontend or integration testing with synthetic meter reading data.",
+    description="Frontend/integration testing with synthetic data. Always simulated: never written to Solana.",
 )
 async def audit_meter_mock(
     custom_reading: Optional[MeterReading] = None,
-    telegram_chat_id: Optional[str] = Form(None),
+    telegram_chat_id: Optional[str] = None,
 ):
     """Quick testing harness that simulates a reading without needing a physical camera photo."""
     start_time = time.perf_counter()
@@ -331,22 +340,21 @@ async def audit_meter_mock(
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
 
-    oracle_proof = await anchor_reading_to_solana(custom_reading)
-    notification = await send_audit_notification(
-        reading=custom_reading,
-        solscan_url=oracle_proof.solscan_url,
-        data_hash=oracle_proof.data_hash,
-        chat_id=telegram_chat_id,
-    )
+    return await _anchor_and_notify(custom_reading, start_time, telegram_chat_id, force_simulated=True)
 
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-    return AuditResponse(
-        status="success",
-        reading=custom_reading,
-        oracle_proof=oracle_proof,
-        notification=notification,
-        execution_time_ms=elapsed_ms,
-    )
+
+@app.post(
+    "/api/v1/verify",
+    response_model=VerifyResult,
+    tags=["Oracle Audit"],
+    summary="Independently verify an anchored reading",
+    description=(
+        "Recomputes the SHA-256 of the submitted reading, fetches the Solana transaction, and checks that the "
+        "EcoTrust memo holds that exact hash and was signed by this oracle's wallet."
+    ),
+)
+async def verify(request: VerifyRequest):
+    return await verify_anchor(request.reading, request.tx_signature)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
-import "./globals.css";
 import "@solana/wallet-adapter-react-ui/styles.css";
+import "./globals.css";
 import type { ReactNode } from "react";
 import { Providers } from "./providers";
 

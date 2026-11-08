@@ -53,17 +53,16 @@ def test_deterministic_sha256_hash():
 
 @pytest.mark.asyncio
 async def test_web3_oracle_fallback():
-    """Verify on-chain anchoring fallback returns a valid Solscan URL and proof."""
+    """Simulated fallback proof keeps the hash contract and is clearly marked (offline: no RPC call)."""
     reading = MeterReading(
         value=500.12,
         unit="kWh",
         confidence=0.99,
         timestamp="2026-11-08T01:00:00Z",
     )
-    proof: OracleProof = await anchor_reading_to_solana(reading)
+    proof: OracleProof = await anchor_reading_to_solana(reading, force_simulated=True)
     assert proof.data_hash == compute_meter_hash(reading)
-    assert "solscan.io/tx" in proof.solscan_url
-    assert "cluster=devnet" in proof.solscan_url
+    assert proof.is_simulated and proof.solscan_url == "" and proof.tx_signature.startswith("SIMULATED-")
     assert proof.network == "solana-devnet"
     assert len(proof.tx_signature) > 10
 
@@ -143,7 +142,8 @@ def test_api_audit_meter_mock():
     assert "reading" in data
     assert "oracle_proof" in data
     assert "notification" in data
-    assert "solscan.io/tx" in data["oracle_proof"]["solscan_url"]
+    # The mock endpoint never writes to Solana
+    assert data["oracle_proof"]["is_simulated"] is True and data["oracle_proof"]["solscan_url"] == ""
     assert data["execution_time_ms"] > 0
 
 
@@ -182,7 +182,8 @@ def test_api_audit_sensor_direct_telemetry():
     assert data["reading"]["unit"] == "m3"
     assert data["reading"]["source"] == "iot_sensor"
     assert data["reading"]["device_id"] == "MODBUS-FLOW-UNIT-99"
-    assert "solscan.io/tx" in data["oracle_proof"]["solscan_url"]
+    proof = data["oracle_proof"]
+    assert proof["solscan_url"] == "" if proof["is_simulated"] else "solscan.io/tx" in proof["solscan_url"]
     assert "EcoTrust:v1:" in data["oracle_proof"]["memo_payload"]
 
 
