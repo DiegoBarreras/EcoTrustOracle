@@ -12,9 +12,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.9",
     "requests>=2.31.0",
-    "google-generativeai>=0.7.0",
     "solana>=0.34.0",
     "solders>=0.21.0",
+    "anthropic>=2.6.0",
 ]
 
 [dependency-groups]

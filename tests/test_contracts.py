@@ -159,3 +159,139 @@ def test_api_audit_sensor_direct_telemetry():
     assert data["reading"]["device_id"] == "MODBUS-FLOW-UNIT-99"
     assert "solscan.io/tx" in data["oracle_proof"]["solscan_url"]
     assert "EcoTrust:v1:" in data["oracle_proof"]["memo_payload"]
+
+
+@pytest.mark.parametrize(
+    "key, provider",
+    [
+        ("AIzaSyExample", "gemini"),
+        ("AQ.Ab8RN6Example", "gemini"),
+        ("sk-ant-api03-example", "claude"),  # must not be mistaken for DeepSeek
+        ("sk-0123456789abcdef", "deepseek"),
+    ],
+)
+def test_vision_provider_detected_from_key(key, provider):
+    from core.vision_agent import detect_provider
+
+    assert detect_provider(key)[0] == provider
+
+
+def test_vision_unknown_key_is_rejected():
+    from core.vision_agent import detect_provider, VisionExtractionError
+
+    with pytest.raises(VisionExtractionError):
+        detect_provider("gsk_not_supported")
+
+
+@pytest.mark.parametrize("key, expected_url_part", [("AIzaX", "googleapis.com"), ("sk-X", "deepseek.com"), ("sk-ant-X", None)])
+def test_vision_call_routes_to_provider_and_parses_json(monkeypatch, key, expected_url_part):
+    """Each key reaches its provider, and fenced JSON from the model is still parsed."""
+    from types import SimpleNamespace
+    import core.vision_agent as va
+
+    calls = {}
+    reply = '```json\n{"value": 12.5, "unit": "bar", "confidence": 0.9}\n```'
+    monkeypatch.setattr(va, "get_settings", lambda: SimpleNamespace(VISION_API_KEY=key, VISION_MODEL=None))
+    monkeypatch.setattr(va, "_call_claude", lambda *a: calls.setdefault("claude", a) and reply)
+    monkeypatch.setattr(va, "_call_openai_compatible", lambda url, *a: calls.setdefault("url", url) and reply)
+
+    assert va._sync_vision_call(b"img")["value"] == 12.5
+    if expected_url_part:
+        assert expected_url_part in calls["url"] and "claude" not in calls
+    else:
+        assert "claude" in calls and "url" not in calls
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ({"confidence": 0.95, "obstruction_ratio": 0.10}, 0.95),  # clean dial: model score kept
+        ({"confidence": 0.95, "obstruction_ratio": 0.30}, 0.95),  # exactly 30%: not over the limit
+        ({"confidence": 0.95, "obstruction_ratio": 0.31}, 0.69),  # >30% glare/dust: capped below 0.70
+        ({"confidence": 0.50, "obstruction_ratio": 0.80}, 0.50),  # already low: untouched
+        ({"confidence": 0.95, "obstruction_ratio": float("nan")}, 0.69),
+        ({"confidence": 1.7}, 1.0),
+        ({"confidence": -0.2}, 0.0),
+        ({"confidence": float("nan")}, 0.0),
+        ({}, 0.0),
+    ],
+)
+def test_vision_confidence_heuristic(raw, expected):
+    from core.vision_agent import _calibrate_confidence
+
+    assert _calibrate_confidence(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_vision_gemini_output_keeps_meter_reading_contract(monkeypatch):
+    """Extra Gemini fields must not leak into MeterReading, and obstruction must cap confidence."""
+    from types import SimpleNamespace
+    import core.vision_agent as va
+
+    monkeypatch.setattr(va, "get_settings", lambda: SimpleNamespace(VISION_API_KEY="test", VISION_MOCK_FALLBACK=False))
+    monkeypatch.setattr(
+        va,
+        "_sync_vision_call",
+        lambda **_: {
+            "value": "4821.37",
+            "unit": "m3",
+            "confidence": 0.93,
+            "obstruction_ratio": 0.45,
+            "meter_type": "cyclometer",
+            "timestamp": "1999-01-01T00:00:00Z",  # a model-invented time must be ignored
+        },
+    )
+
+    reading = await read_meter_from_image(b"img", "image/jpeg")
+    data = reading.model_dump()
+
+    assert set(data) == {"value", "unit", "confidence", "timestamp", "source", "device_id"}
+    assert isinstance(data["value"], float) and data["value"] == 4821.37
+    assert isinstance(data["unit"], str) and data["unit"] == "m3"
+    assert isinstance(data["confidence"], float) and data["confidence"] < 0.70
+    assert isinstance(data["timestamp"], str) and not data["timestamp"].startswith("1999")
+    datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+
+
+@pytest.mark.asyncio
+async def test_vision_missing_value_is_rejected(monkeypatch):
+    from types import SimpleNamespace
+    import core.vision_agent as va
+
+    monkeypatch.setattr(va, "get_settings", lambda: SimpleNamespace(VISION_API_KEY="test", VISION_MOCK_FALLBACK=False))
+    monkeypatch.setattr(va, "_sync_vision_call", lambda **_: {"unit": "kWh", "confidence": 0.9})
+
+    with pytest.raises(va.VisionExtractionError):
+        await read_meter_from_image(b"img", "image/jpeg")
+
+
+def _read(value, confidence=0.98, unit="kWh"):
+    return {"value": value, "unit": unit, "confidence": confidence, "obstruction_ratio": 0.0}
+
+
+@pytest.mark.parametrize(
+    "results, value, max_confidence, votes",
+    [
+        ([_read(4821.7), _read(4821.7, 0.95), _read(4821.7)], 4821.7, 0.95, 3),  # unanimous: lowest confidence kept
+        ([_read(4821.7), _read(482.17), _read(4821.7)], 4821.7, 0.69, 2),  # 10x misread outvoted, flagged for review
+        ([_read(4821.7), _read(482.17), _read(421.7)], None, 0.30, 1),  # no majority
+        ([_read(4821.7), TimeoutError("api"), _read(4821.7)], 4821.7, 0.69, 2),  # a failed call counts as dissent
+        ([_read(4821.7), _read(4821.7, unit="m3"), _read(4821.7)], 4821.7, 0.69, 2),  # unit disagreement counts
+        ([_read(4821.7), {"unit": "kWh"}, _read("NaN"), ], 4821.7, 0.30, 1),  # unusable reads count as dissent
+    ],
+)
+def test_vision_consensus(results, value, max_confidence, votes):
+    from core.vision_agent import _consensus
+
+    raw, confidence, got_votes = _consensus(results)
+    assert got_votes == votes
+    assert confidence <= max_confidence
+    if value is not None:
+        assert raw["value"] == value
+
+
+def test_vision_consensus_all_failed_raises_original_error():
+    from core.vision_agent import _consensus
+
+    with pytest.raises(TimeoutError):
+        _consensus([TimeoutError("a"), ValueError("b"), {"unit": "kWh"}])

@@ -27,15 +27,18 @@ class Settings(BaseSettings):
     PORT: int = 8000
     DEBUG: bool = True
 
-    # AI Vision (Google Gemini)
-    GEMINI_API_KEY: Optional[str] = Field(
+    # AI Vision (provider auto-detected from the key: Gemini "AIza..."/"AQ....", Claude "sk-ant-...", DeepSeek "sk-...")
+    VISION_API_KEY: Optional[str] = Field(
         default=None,
-        description="Google Generative AI API Key for Gemini 1.5 Flash Vision",
+        description="API key of the vision model provider (Gemini, Claude or DeepSeek)",
     )
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    VISION_MODEL: Optional[str] = Field(
+        default=None,
+        description="Optional model override; empty uses the provider's default vision model",
+    )
     VISION_MOCK_FALLBACK: bool = Field(
         default=True,
-        description="Enable high-fidelity mock data if Gemini API fails or key is missing",
+        description="Enable high-fidelity mock data if the vision API fails or key is missing",
     )
 
     # Web3 / Solana Configuration

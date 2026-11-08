@@ -169,6 +169,6 @@ Unified output returned to the HTTP client on `POST /api/v1/audit-meter`.
 In hackathon environments, third-party APIs (Gemini quota limits, Solana Devnet airdrop rate limits, Telegram bot setup) frequently cause blockers.
 
 **EcoTrust Oracle guarantees zero-downtime development:**
-* If `GEMINI_API_KEY` is omitted or invalid, `core/vision_agent.py` automatically produces a high-fidelity synthetic reading.
+* If `VISION_API_KEY` is omitted or invalid, `core/vision_agent.py` automatically produces a high-fidelity synthetic reading.
 * If `SOLANA_PRIVATE_KEY` has 0 SOL or RPC airdrop is rate-limited, `core/web3_oracle.py` generates a mathematically valid signed transaction simulation and Solscan link with `is_simulated=true`.
 * If `TELEGRAM_BOT_TOKEN` is unset, `core/notifier.py` logs formatted HTML to the terminal without throwing exceptions.

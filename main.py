@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     logger.info("==================================================")
     logger.info(f"🌿 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"⚡ Solana RPC: {settings.SOLANA_RPC_URL}")
-    logger.info(f"🤖 Gemini Vision: {'Configured' if settings.GEMINI_API_KEY else 'MOCK Fallback'}")
+    logger.info(f"🤖 Vision model: {'Configured' if settings.VISION_API_KEY else 'MOCK Fallback'}")
     logger.info(f"💬 Telegram Bot: {'Configured' if settings.TELEGRAM_BOT_TOKEN else 'MOCK Fallback'}")
     logger.info("==================================================")
     yield
@@ -93,7 +93,7 @@ async def health_check():
     - Solana Devnet RPC accessibility
     - Telegram Notifier credentials
     """
-    gemini_ready = bool(settings.GEMINI_API_KEY) or settings.VISION_MOCK_FALLBACK
+    gemini_ready = bool(settings.VISION_API_KEY) or settings.VISION_MOCK_FALLBACK
     solana_ready = True  # RPC fallback handles connectivity
     telegram_ready = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID) or settings.NOTIFIER_MOCK_FALLBACK
 
