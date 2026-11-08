@@ -154,8 +154,8 @@ def _get_mock_meter_reading(reason: str = "Mock fallback enabled") -> MeterReadi
 # Key prefix -> (provider, default vision model). Order matters: "sk-ant-" must be checked before "sk-".
 PROVIDERS = (
     ("sk-ant-", "claude", "claude-opus-5-5"),
-    ("AIza", "gemini", "gemini-1.5-flash"),
-    ("AQ.", "gemini", "gemini-1.5-flash"),  # newer AI Studio key format
+    ("AIza", "gemini", "gemini-flash-lite-latest"),
+    ("AQ.", "gemini", "gemini-flash-lite-latest"),  # newer AI Studio key format
     ("sk-", "deepseek", "deepseek-flash"),
 )
 OPENAI_COMPATIBLE_URLS = {
@@ -197,9 +197,53 @@ def _call_claude(api_key: str, model: str, prompt: str, image_b64: str, mime_typ
     return "".join(block.text for block in response.content if block.type == "text")
 
 
+def _call_gemini_native(api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> str:
+    """Direct native Gemini v1beta generateContent endpoint with guaranteed structured JSON."""
+    import requests
+
+    chosen_model = model
+    if not chosen_model or chosen_model in ("gemini-1.5-flash", "gemini-3.6-flash", "gemini-2.5-flash"):
+        chosen_model = "gemini-flash-lite-latest"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{chosen_model}:generateContent?key={api_key}"
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": SYSTEM_INSTRUCTION}]
+        },
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": image_b64
+                        }
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "response_mime_type": "application/json"
+        }
+    }
+    response = requests.post(url, json=payload, timeout=30)
+    if not response.ok and chosen_model != "gemini-3-flash-preview":
+        fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
+        response = requests.post(fallback_url, json=payload, timeout=30)
+
+    response.raise_for_status()
+    data = response.json()
+    return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
 def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> str:
     """Gemini and DeepSeek both accept the OpenAI chat/completions format with base64 image_url parts."""
     import requests
+
+    if "googleapis.com" in url:
+        return _call_gemini_native(api_key, model, prompt, image_b64, mime_type)
 
     response = requests.post(
         url,
