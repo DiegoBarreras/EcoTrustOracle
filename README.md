@@ -3,7 +3,7 @@
 [![Solana Devnet](https://img.shields.io/badge/Solana-Devnet-14F195?style=for-the-badge&logo=solana&logoColor=black)](https://solscan.io/?cluster=devnet)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Gemini 1.5 Flash](https://img.shields.io/badge/AI_Vision-Gemini_1.5_Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://aistudio.google.com)
+[![AI Vision: DeepSeek | Gemini | Claude](https://img.shields.io/badge/AI_Vision-DeepSeek_%7C_Gemini_%7C_Claude-4D6BFE?style=for-the-badge)](#3-configure-credentials-env)
 [![Package Manager: uv](https://img.shields.io/badge/Managed_with-uv-DE5FE9?style=for-the-badge)](https://github.com/astral-sh/uv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
@@ -21,7 +21,7 @@
 
 ### 🛡 The Solution: EcoTrust Oracle
 * **Physical-to-Chain AI Bridge**: Plant operators take a single photo using any mobile camera.
-* **Gemini 1.5 Flash Vision**: Evaluates the image, interprets analog needle dials, cyclometer drums, or digital 7-segment displays, and extracts a strict schema (`value`, `unit`, `confidence`, `timestamp`).
+* **Multi-Provider AI Vision (DeepSeek, Gemini or Claude)**: Evaluates the image, interprets multi-dial registers, cyclometer drums, digital 7-segment displays, or needle gauges, and extracts a strict schema (`value`, `unit`, `confidence`, `timestamp`). The provider is picked automatically from the API key, and every photo is read 3 times: if the reads disagree, confidence drops below 0.70 and the reading is flagged for human review.
 * **Deterministic Cryptographic Hashing**: Generates an authoritative SHA-256 fingerprint from the canonical reading.
 * **Solana Memo Program Anchoring**: Anchors the hash onto **Solana Devnet** via the native Memo Program (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`), creating an immutable, verifiable ESG certificate with zero smart contract deployment overhead.
 * **Real-time Telegram Alerts**: Pushes verifiable audit summaries with instant [Solscan Devnet](https://solscan.io/?cluster=devnet) links directly to compliance auditors.
@@ -41,9 +41,9 @@ flowchart TD
     end
 
     subgraph AI["🤖 AI Vision Engine"]
-        Gemini["Google Gemini 1.5 Flash Vision\n(Extracts reading & confidence)"]
-        EpImage -->|Raw Image Bytes| Gemini
-        Gemini -->|MeterReading Schema| CoreBus
+        Vision["Vision AI: DeepSeek / Gemini / Claude\n(3-read consensus: reading & confidence)"]
+        EpImage -->|Raw Image Bytes| Vision
+        Vision -->|MeterReading Schema| CoreBus
     end
 
     subgraph CoreBus["⚡ Decoupled Core Oracle Pipeline"]
@@ -124,7 +124,7 @@ All modules communicate through strongly-typed Pydantic contracts located in `co
 |---|---|---|
 | **Runtime & Packaging** | Python 3.10+, `uv` | Blazing-fast virtual environment & dependency management |
 | **Orchestration API** | FastAPI, Uvicorn | Async ASGI pipeline with OpenAPI interactive docs |
-| **AI Vision** | Google Generative AI (Gemini 1.5 Flash) | Fast multimodal token processing with structured JSON output |
+| **AI Vision** | DeepSeek (`deepseek-flash`), Google Gemini (`gemini-3.6-flash`) or Anthropic Claude, auto-detected from the API key | Multimodal meter reading with strict JSON output and 3-read consensus |
 | **Web3 & Blockchain** | Solana Python SDK, `solders` | High-throughput, sub-second settlement on Solana Devnet |
 | **Smart Contract Layer** | Native Solana Memo Program | Zero smart contract gas fee waste; permanent on-chain audit log |
 | **Notifications** | Telegram Bot API (`requests`) | Instant operational delivery to compliance channels |
@@ -160,6 +160,16 @@ cp .env.example .env
 ```
 *(Leave empty or set `*_MOCK_FALLBACK=true` to test the complete pipeline offline without credentials!)*
 
+**Choosing the Vision AI:** paste a single key in `VISION_API_KEY`; the provider is detected from its prefix, no code changes needed.
+
+| Key starts with | Provider | Default model |
+|---|---|---|
+| `sk-` | DeepSeek | `deepseek-flash` |
+| `AIza` or `AQ.` | Google Gemini | `gemini-3.6-flash` |
+| `sk-ant-` | Anthropic Claude | `claude-opus-5-5` |
+
+Set `VISION_MODEL` to use another model from the same provider. While testing a real key, set `VISION_MOCK_FALLBACK=false` so API errors show up instead of the synthetic reading.
+
 ### 4. Run the Backend Server
 ```bash
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
@@ -189,7 +199,7 @@ See [`X402.md`](X402.md) for the planned HTTP 402 pay-per-audit model (not yet i
 ## 📡 API Reference
 
 ### `POST /api/v1/audit-meter`
-**AI Vision Ingestion**: Accepts a photograph of an analog meter, extracts reading using Gemini 1.5 Flash Vision, anchors hash to Solana Devnet, and alerts Telegram.
+**AI Vision Ingestion**: Accepts a photograph of an analog meter, extracts the reading with the configured Vision AI (DeepSeek, Gemini or Claude), anchors hash to Solana Devnet, and alerts Telegram.
 * **Form Parameters**:
   * `file`: (Required) Image file (`image/jpeg`, `image/png`).
   * `meter_hint`: (Optional) Operator notes (e.g., `"Primary Boiler Flowmeter"`).
