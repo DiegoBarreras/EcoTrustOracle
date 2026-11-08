@@ -146,6 +146,19 @@ class NotificationResult(BaseModel):
     )
 
 
+class VisionAnalysis(BaseModel):
+    """
+    How the vision agent reached the reading. Reported next to the reading, never hashed,
+    so the anchored MeterReading contract stays unchanged.
+    """
+    model: str = Field(..., description="Vision model that actually answered (after any fallback), or 'mock'")
+    meter_type: Optional[str] = Field(default=None, description="multi_dial | cyclometer | seven_segment | needle_gauge | other")
+    obstruction_ratio: Optional[float] = Field(default=None, description="Fraction of the reading area hidden by glare, dust or cropping")
+    votes: int = Field(..., description="Independent reads that agreed on the reported value")
+    total_reads: int = Field(..., description="Independent reads attempted")
+    is_mock: bool = Field(default=False, description="True when no vision API key is configured and a synthetic reading was used")
+
+
 class AuditResponse(BaseModel):
     """
     Contract 4: Output of main.py orchestrator endpoint POST /api/v1/audit-meter.
@@ -170,6 +183,10 @@ class AuditResponse(BaseModel):
     execution_time_ms: float = Field(
         ...,
         description="Total orchestrator pipeline execution latency in milliseconds",
+    )
+    vision: Optional[VisionAnalysis] = Field(
+        default=None,
+        description="AI vision analysis details (photo audits only)",
     )
 
 

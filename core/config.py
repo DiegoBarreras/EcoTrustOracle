@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     )
     VISION_MOCK_FALLBACK: bool = Field(
         default=True,
-        description="Enable high-fidelity mock data if the vision API fails or key is missing",
+        description="Use a synthetic (flagged) reading when no vision API key is set. API failures with a key always raise.",
     )
 
     # Web3 / Solana Configuration

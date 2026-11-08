@@ -14,7 +14,7 @@ from collections import Counter
 from typing import Optional, Dict, Any, List, Tuple
 
 from core.config import get_settings
-from core.schemas import MeterReading
+from core.schemas import MeterReading, VisionAnalysis
 
 logger = logging.getLogger("ecotrust.vision")
 
@@ -151,11 +151,14 @@ def _get_mock_meter_reading(reason: str = "Mock fallback enabled") -> MeterReadi
     )
 
 
+# Full Flash reads digits more reliably than Flash-Lite; _call_gemini_native falls back to Lite when it is busy.
+GEMINI_DEFAULT_MODEL = "gemini-flash-latest"
+
 # Key prefix -> (provider, default vision model). Order matters: "sk-ant-" must be checked before "sk-".
 PROVIDERS = (
     ("sk-ant-", "claude", "claude-opus-5-5"),
-    ("AIza", "gemini", "gemini-flash-lite-latest"),
-    ("AQ.", "gemini", "gemini-flash-lite-latest"),  # newer AI Studio key format
+    ("AIza", "gemini", GEMINI_DEFAULT_MODEL),
+    ("AQ.", "gemini", GEMINI_DEFAULT_MODEL),  # newer AI Studio key format
     ("sk-", "deepseek", "deepseek-flash"),
 )
 OPENAI_COMPATIBLE_URLS = {
@@ -197,15 +200,20 @@ def _call_claude(api_key: str, model: str, prompt: str, image_b64: str, mime_typ
     return "".join(block.text for block in response.content if block.type == "text")
 
 
-def _call_gemini_native(api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> str:
-    """Direct native Gemini v1beta generateContent endpoint with guaranteed structured JSON."""
+# Retired model names that may still sit in old .env files; they are treated as "use the default".
+RETIRED_GEMINI_MODELS = ("gemini-1.5-flash", "gemini-1.5-pro")
+# Always-available last resort: the stronger Flash models often return 503 (high demand) and Pro needs a paid plan.
+GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest"
+
+
+def _call_gemini_native(api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> Tuple[str, str]:
+    """
+    Native Gemini v1beta generateContent with JSON output. Tries the requested model first and falls back
+    to GEMINI_FALLBACK_MODEL when it is overloaded or out of quota. Returns (text, model actually used).
+    """
     import requests
 
-    chosen_model = model
-    if not chosen_model or chosen_model in ("gemini-1.5-flash", "gemini-3.6-flash", "gemini-2.5-flash"):
-        chosen_model = "gemini-flash-lite-latest"
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{chosen_model}:generateContent?key={api_key}"
+    chosen_model = model if model and model not in RETIRED_GEMINI_MODELS else GEMINI_DEFAULT_MODEL
     payload = {
         "system_instruction": {
             "parts": [{"text": SYSTEM_INSTRUCTION}]
@@ -228,18 +236,33 @@ def _call_gemini_native(api_key: str, model: str, prompt: str, image_b64: str, m
             "response_mime_type": "application/json"
         }
     }
-    response = requests.post(url, json=payload, timeout=30)
-    if not response.ok and chosen_model != "gemini-3-flash-preview":
-        fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
-        response = requests.post(fallback_url, json=payload, timeout=30)
+    attempts = list(dict.fromkeys((chosen_model, GEMINI_FALLBACK_MODEL)))  # dedupe, keep order
+    for i, attempt in enumerate(attempts):
+        last = i == len(attempts) - 1
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{attempt}:generateContent",
+                headers={"x-goog-api-key": api_key},  # header, not ?key=, so the key never lands in URL logs
+                json=payload,
+                timeout=30 if last else 15,  # an overloaded model may hang instead of answering 503
+            )
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            if last:
+                raise
+            logger.warning(f"⚠️ [VisionAgent] Gemini model {attempt} timed out ({exc}); trying fallback")
+            continue
+        if last or response.status_code not in (429, 503):
+            break
+        logger.warning(f"⚠️ [VisionAgent] Gemini model {attempt} unavailable ({response.status_code}); trying fallback")
 
     response.raise_for_status()
     data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    return data["candidates"][0]["content"]["parts"][0]["text"], data.get("modelVersion", attempt)
 
 
-def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> str:
-    """Gemini and DeepSeek both accept the OpenAI chat/completions format with base64 image_url parts."""
+def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> Tuple[str, str]:
+    """Gemini and DeepSeek both accept the OpenAI chat/completions format with base64 image_url parts.
+    Returns (text, model actually used)."""
     import requests
 
     if "googleapis.com" in url:
@@ -262,7 +285,7 @@ def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, ima
         timeout=60,
     )
     response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"] or ""
+    return response.json()["choices"][0]["message"]["content"] or "", model
 
 
 def _sync_vision_call(
@@ -284,15 +307,17 @@ def _sync_vision_call(
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
 
     if provider == "claude":
-        text = _call_claude(settings.VISION_API_KEY, model, prompt, image_b64, mime_type)
+        text, used_model = _call_claude(settings.VISION_API_KEY, model, prompt, image_b64, mime_type), model
     else:
-        text = _call_openai_compatible(OPENAI_COMPATIBLE_URLS[provider], settings.VISION_API_KEY, model, prompt, image_b64, mime_type)
+        text, used_model = _call_openai_compatible(OPENAI_COMPATIBLE_URLS[provider], settings.VISION_API_KEY, model, prompt, image_b64, mime_type)
 
     # Keep only the JSON object, in case the model wraps it in Markdown fences or prose.
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end < start:
         raise VisionExtractionError(f"{provider} returned no JSON object")
-    return json.loads(text[start:end + 1])
+    raw = json.loads(text[start:end + 1])
+    raw["model"] = used_model
+    return raw
 
 
 async def read_meter_from_image(
@@ -312,12 +337,29 @@ async def read_meter_from_image(
         Validated MeterReading Pydantic instance matching the contract:
         {"value": float, "unit": str, "confidence": float, "timestamp": str}
     """
+    reading, _ = await analyze_meter_image(image_bytes, mime_type, meter_hint)
+    return reading
+
+
+async def analyze_meter_image(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    meter_hint: Optional[str] = None,
+) -> Tuple[MeterReading, VisionAnalysis]:
+    """
+    Same as read_meter_from_image, plus how the reading was reached (model, meter type, votes, obstruction).
+
+    The synthetic mock reading is only used when NO API key is configured (offline development).
+    With a key configured, any failure raises VisionExtractionError: a made-up reading must never be
+    anchored on Solana as if it were real evidence.
+    """
     settings = get_settings()
 
     api_key = (settings.VISION_API_KEY or "").strip()
     if not api_key or api_key == "your_gemini_api_key_here" or api_key.startswith("your_"):
         if settings.VISION_MOCK_FALLBACK:
-            return _get_mock_meter_reading(reason="VISION_API_KEY not configured or placeholder detected")
+            mock = _get_mock_meter_reading(reason="VISION_API_KEY not configured or placeholder detected")
+            return mock, VisionAnalysis(model="mock", votes=0, total_reads=0, is_mock=True)
         raise VisionExtractionError("VISION_API_KEY is not configured and VISION_MOCK_FALLBACK=False")
 
     try:
@@ -346,10 +388,16 @@ async def read_meter_from_image(
             f"✅ [VisionAgent] Extracted {reading.value} {reading.unit} (votes: {votes}/{CONSENSUS_READS}, "
             f"type: {raw_result.get('meter_type')}, obstruction: {raw_result.get('obstruction_ratio')}, conf: {reading.confidence})"
         )
-        return reading
+        obstruction = raw_result.get("obstruction_ratio")
+        analysis = VisionAnalysis(
+            model=str(raw_result.get("model", "unknown")),
+            meter_type=raw_result.get("meter_type"),
+            obstruction_ratio=float(obstruction) if isinstance(obstruction, (int, float)) and math.isfinite(obstruction) else None,
+            votes=votes,
+            total_reads=CONSENSUS_READS,
+        )
+        return reading, analysis
 
     except Exception as exc:
         logger.error(f"❌ [VisionAgent] Failed to read meter with vision model: {exc}", exc_info=True)
-        if settings.VISION_MOCK_FALLBACK:
-            return _get_mock_meter_reading(reason=f"Vision API invocation failed: {exc}")
         raise VisionExtractionError(f"Error extracting meter reading from image: {exc}") from exc
