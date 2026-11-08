@@ -34,20 +34,28 @@ def format_telegram_audit_message(
         unit = reading.unit
         conf = reading.confidence
         timestamp = reading.timestamp
+        source = reading.source
+        device_id = reading.device_id
     else:
         val = reading.get("value", "N/A")
         unit = reading.get("unit", "")
         conf = reading.get("confidence", 0.0)
         timestamp = reading.get("timestamp", "N/A")
+        source = reading.get("source", "ai_vision")
+        device_id = reading.get("device_id")
 
     conf_pct = f"{float(conf) * 100:.1f}%"
     hash_short = f"{data_hash[:16]}...{data_hash[-8:]}" if data_hash else "Verified"
+    source_label = "🔌 Direct IoT Sensor" if source == "iot_sensor" else "📸 Gemini AI Vision"
+    asset_line = f"🏷 <b>Asset Tag:</b> <code>{device_id}</code>\n" if device_id else ""
 
     message = (
         "🌿 <b>ECOTRUST ORACLE — ESG AUDIT CERTIFICATE</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 <b>Meter Reading:</b> <code>{val} {unit}</code>\n"
-        f"🎯 <b>AI Vision Confidence:</b> <code>{conf_pct}</code>\n"
+        f"📡 <b>Source:</b> <code>{source_label}</code>\n"
+        f"{asset_line}"
+        f"🎯 <b>Accuracy/Confidence:</b> <code>{conf_pct}</code>\n"
         f"⏱ <b>Timestamp (UTC):</b> <code>{timestamp}</code>\n"
         f"🔒 <b>SHA-256 Digest:</b> <code>{hash_short}</code>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

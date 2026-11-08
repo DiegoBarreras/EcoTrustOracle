@@ -32,37 +32,27 @@
 
 ```mermaid
 flowchart TD
-    subgraph PhysicalWorld["🏭 Physical Infrastructure"]
-        M[("Analog Meter / Dial\n(Water, Gas, Electricity, CO2)")]
-        Cam["📸 Mobile / IoT Camera"]
-        M --> Cam
-    end
-
-    subgraph API["⚡ EcoTrust Orchestrator (FastAPI)"]
-        Endpoint["POST /api/v1/audit-meter"]
-        Cam -->|Multipart Form Upload| Endpoint
+    subgraph Ingestion["🔌 Multi-Source Data Ingestion"]
+        direction TB
+        M[("Analog Meter / Dial\n(Water, Gas, Electricity, CO2)")] --> Cam["📸 Mobile / IoT Camera"]
+        Cam -->|Image Upload| EpImage["POST /api/v1/audit-meter"]
+        
+        Sensor[("⚡ Digital IoT Hardware\n(Modbus, RS-485, Arduino, SCADA)")] -->|Direct Telemetry JSON| EpSensor["POST /api/v1/audit-sensor"]
     end
 
     subgraph AI["🤖 AI Vision Engine"]
-        Gemini["Google Gemini 1.5 Flash Vision\n(System Prompt & JSON Schema)"]
-        Endpoint -->|Raw Image Bytes| Gemini
-        Gemini -->|Validated Reading JSON| Endpoint
+        Gemini["Google Gemini 1.5 Flash Vision\n(Extracts reading & confidence)"]
+        EpImage -->|Raw Image Bytes| Gemini
+        Gemini -->|MeterReading Schema| CoreBus
     end
 
-    subgraph Web3["⛓ Solana Blockchain Oracle"]
-        Hasher["Deterministic SHA-256 Hasher"]
-        MemoTx["Solana Native Memo Program\n(Program ID: MemoSq4g...)"]
-        Solscan["Solscan Devnet Explorer"]
-        Endpoint --> Hasher
-        Hasher --> MemoTx
-        MemoTx -->|Transaction Signature| Solscan
-    end
-
-    subgraph Notifier["📨 Stakeholder Comms"]
-        TG["Telegram Bot API\n(HTML ESG Audit Certificate)"]
-        Auditor["🏢 Compliance Auditor / Enterprise ERP"]
-        Endpoint --> TG
-        TG --> Auditor
+    subgraph CoreBus["⚡ Decoupled Core Oracle Pipeline"]
+        EpSensor -->|MeterReading Schema| Hasher
+        CoreBus --> Hasher["Deterministic SHA-256 Canonical Hasher"]
+        Hasher --> Web3["⛓ Solana Devnet Memo Program\n(Program ID: MemoSq4g...)"]
+        Web3 --> Solscan["🔍 Solscan Devnet Explorer"]
+        Web3 --> TG["💬 Telegram Bot API\n(HTML ESG Audit Certificate)"]
+        TG --> Auditor["🏢 Compliance Auditor / ERP"]
     end
 ```
 
@@ -72,13 +62,15 @@ flowchart TD
 
 All modules communicate through strongly-typed Pydantic contracts located in `core/schemas.py`.
 
-### 1. Vision Agent Output (`core/vision_agent.py`)
+### 1. Unified Meter Reading Contract (`MeterReading` in `core/schemas.py`)
 ```json
 {
   "value": 142.85,
   "unit": "kWh",
   "confidence": 0.98,
-  "timestamp": "2026-11-08T01:15:31Z"
+  "timestamp": "2026-11-08T01:15:31Z",
+  "source": "ai_vision",
+  "device_id": "MODBUS-FLOW-042"
 }
 ```
 
@@ -186,11 +178,16 @@ uv run pytest -v
 ## 📡 API Reference
 
 ### `POST /api/v1/audit-meter`
-Performs end-to-end audit: extracts reading from photo, anchors proof on Solana Devnet, and alerts Telegram.
+**AI Vision Ingestion**: Accepts a photograph of an analog meter, extracts reading using Gemini 1.5 Flash Vision, anchors hash to Solana Devnet, and alerts Telegram.
 * **Form Parameters**:
-  * `file`: (Required) Image upload (`image/jpeg`, `image/png`).
+  * `file`: (Required) Image file (`image/jpeg`, `image/png`).
   * `meter_hint`: (Optional) Operator notes (e.g., `"Primary Boiler Flowmeter"`).
   * `telegram_chat_id`: (Optional) Recipient override for ESG certificate.
+
+### `POST /api/v1/audit-sensor`
+**Direct IoT Telemetry Ingestion**: Bypasses computer vision. Accepts structured reading payloads directly from hardware sensors (Modbus, Arduino, RS-485, SCADA, connected PC), hashes the measurement, and anchors proof to Solana Devnet.
+* **JSON Body**: `MeterReading` schema (`value`, `unit`, `confidence`, `timestamp`, `source`, `device_id`).
+* **Example Script**: See [`examples/iot_sensor_client.py`](examples/iot_sensor_client.py) for a working hardware client!
 
 ### `POST /api/v1/audit-meter-mock`
 Simulates the entire Solana Devnet anchoring & notification pipeline with synthetic data (ideal for frontend developers).

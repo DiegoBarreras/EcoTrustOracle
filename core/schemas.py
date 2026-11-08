@@ -36,6 +36,16 @@ class MeterReading(BaseModel):
         description="ISO 8601 UTC timestamp of the meter reading capture (e.g. 2026-11-08T01:15:31Z)",
         examples=["2026-11-08T01:15:31Z"],
     )
+    source: str = Field(
+        default="ai_vision",
+        description="Provenance of reading: 'ai_vision' (analog camera), 'iot_sensor' (USB/serial/MQTT), or 'scada'",
+        examples=["ai_vision", "iot_sensor"],
+    )
+    device_id: Optional[str] = Field(
+        default=None,
+        description="Physical asset ID, sensor serial number, or meter tag (e.g. 'SENSOR-MODBUS-042')",
+        examples=["SENSOR-MODBUS-042"],
+    )
 
     @field_validator("timestamp")
     @classmethod
@@ -54,12 +64,16 @@ class MeterReading(BaseModel):
 
     def to_canonical_dict(self) -> dict:
         """Returns the dictionary with keys sorted for deterministic hashing."""
-        return {
+        canonical = {
             "confidence": round(float(self.confidence), 4),
+            "source": self.source.strip().lower(),
             "timestamp": self.timestamp,
             "unit": self.unit.strip().upper(),
             "value": round(float(self.value), 4),
         }
+        if self.device_id:
+            canonical["device_id"] = str(self.device_id).strip()
+        return canonical
 
 
 class OracleProof(BaseModel):

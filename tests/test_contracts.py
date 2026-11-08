@@ -32,7 +32,8 @@ def test_meter_reading_contract_validation():
 
     # Verify canonical dict sorting
     canonical = reading.to_canonical_dict()
-    assert list(canonical.keys()) == ["confidence", "timestamp", "unit", "value"]
+    assert set(["confidence", "timestamp", "unit", "value", "source"]).issubset(set(canonical.keys()))
+    assert list(canonical.keys()) == sorted(list(canonical.keys()))
 
 
 def test_deterministic_sha256_hash():
@@ -133,3 +134,28 @@ def test_api_audit_meter_with_image_upload():
     assert json_resp["status"] in ("success", "partial_success")
     assert json_resp["reading"]["value"] > 0
     assert "solscan_url" in json_resp["oracle_proof"]
+
+
+def test_api_audit_sensor_direct_telemetry():
+    """
+    Verify POST /api/v1/audit-sensor handles direct telemetry from connected hardware sensors,
+    bypassing the vision engine completely while preserving the on-chain anchor.
+    """
+    telemetry_payload = {
+        "value": 1850.45,
+        "unit": "m3",
+        "confidence": 1.0,
+        "timestamp": "2026-11-08T02:00:00Z",
+        "source": "iot_sensor",
+        "device_id": "MODBUS-FLOW-UNIT-99",
+    }
+    res = client.post("/api/v1/audit-sensor", json=telemetry_payload)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["reading"]["value"] == 1850.45
+    assert data["reading"]["unit"] == "m3"
+    assert data["reading"]["source"] == "iot_sensor"
+    assert data["reading"]["device_id"] == "MODBUS-FLOW-UNIT-99"
+    assert "solscan.io/tx" in data["oracle_proof"]["solscan_url"]
+    assert "EcoTrust:v1:" in data["oracle_proof"]["memo_payload"]

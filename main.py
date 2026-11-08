@@ -214,6 +214,84 @@ async def audit_meter(
 
 
 @app.post(
+    "/api/v1/audit-sensor",
+    response_model=AuditResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Oracle Audit"],
+    summary="Direct IoT Sensor Telemetry Ingestion",
+    description=(
+        "Receives meter measurements directly from connected hardware sensors "
+        "(Modbus, Arduino, Raspberry Pi, SCADA, USB/Serial), hashes the canonical reading, "
+        "and anchors proof directly to Solana Devnet without requiring camera image processing."
+    ),
+)
+async def audit_sensor(
+    reading: MeterReading,
+    telegram_chat_id: Optional[str] = None,
+):
+    """
+    Ingests telemetry directly from connected IoT devices/sensors, bypassing computer vision.
+    Demonstrates true modularity: any data source can be anchored to Solana.
+    """
+    start_time = time.perf_counter()
+    logger.info(
+        f"🔌 [Sensor Ingest] Received telemetry from device '{reading.device_id or 'anonymous'}': "
+        f"{reading.value} {reading.unit} (source: {reading.source})"
+    )
+
+    # Automatically set source to iot_sensor if left as default ai_vision
+    if reading.source == "ai_vision":
+        reading.source = "iot_sensor"
+
+    # Step 1: Web3 Cryptographic Anchoring (Developer 2 Module)
+    try:
+        oracle_proof = await anchor_reading_to_solana(reading)
+    except SolanaOracleError as err:
+        logger.error(f"Web3 Oracle failed: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Solana Devnet anchoring error: {err}",
+        )
+
+    # Step 2: Telegram Notification Dispatch (Developer 3 Module)
+    try:
+        notification = await send_audit_notification(
+            reading=reading,
+            solscan_url=oracle_proof.solscan_url,
+            data_hash=oracle_proof.data_hash,
+            chat_id=telegram_chat_id,
+        )
+    except NotificationError as err:
+        logger.warning(f"Notification error: {err}")
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        return AuditResponse(
+            status="partial_success",
+            reading=reading,
+            oracle_proof=oracle_proof,
+            notification={
+                "sent": False,
+                "channel": "telegram",
+                "recipient": telegram_chat_id or settings.TELEGRAM_CHAT_ID,
+                "message_id": None,
+                "is_mock": False,
+                "error": str(err),
+            },
+            execution_time_ms=elapsed_ms,
+        )
+
+    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    logger.info(f"🏁 [Sensor Pipeline Complete] Telemetry anchored in {elapsed_ms}ms")
+
+    return AuditResponse(
+        status="success",
+        reading=reading,
+        oracle_proof=oracle_proof,
+        notification=notification,
+        execution_time_ms=elapsed_ms,
+    )
+
+
+@app.post(
     "/api/v1/audit-meter-mock",
     response_model=AuditResponse,
     status_code=status.HTTP_201_CREATED,

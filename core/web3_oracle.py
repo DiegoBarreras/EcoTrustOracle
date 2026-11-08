@@ -47,10 +47,13 @@ def compute_meter_hash(reading: Union[MeterReading, Dict[str, Any]]) -> str:
         # Standardize raw dict keys and numeric precision
         canonical_dict = {
             "confidence": round(float(reading.get("confidence", 0.0)), 4),
+            "source": str(reading.get("source", "ai_vision")).strip().lower(),
             "timestamp": str(reading.get("timestamp", "")),
             "unit": str(reading.get("unit", "")).strip().upper(),
             "value": round(float(reading.get("value", 0.0)), 4),
         }
+        if reading.get("device_id"):
+            canonical_dict["device_id"] = str(reading["device_id"]).strip()
 
     canonical_json = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"))
     sha256_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
