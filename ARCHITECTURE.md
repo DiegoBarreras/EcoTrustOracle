@@ -2,7 +2,7 @@
 
 > **B2B SaaS Physical Oracle for ESG & Sustainability Compliance**  
 > *Solana Hackathon (AI Track)*  
-> Built with FastAPI, Gemini 1.5 Flash Vision, Solana Devnet (Memo Program), and Telegram Bot API.
+> Built with FastAPI, multi-provider Vision AI (DeepSeek, Gemini or Claude), Solana Devnet (Memo Program), and Telegram Bot API.
 
 ---
 
@@ -11,7 +11,7 @@
 Corporate ESG (Environmental, Social, and Governance) compliance currently suffers from severe fraud, manual reporting errors, and "greenwashing." Industrial meters (measuring water flow, natural gas, electricity, and $CO_2$ emissions) are often legacy analog dials or siloed digital counters without Internet connectivity.
 
 **EcoTrust Oracle** functions as a **Decentralized Physical Oracle**:
-1. **AI Vision Extraction**: An on-site operator or IoT camera takes a photograph of an industrial meter. Google Gemini 1.5 Flash extracts the reading, physical units, and reading confidence.
+1. **AI Vision Extraction**: An on-site operator or IoT camera takes a photograph of an industrial meter. The Vision AI (DeepSeek, Gemini or Claude, detected from the API key) reads it 3 times and extracts the reading, physical units, and a consensus-checked confidence.
 2. **Deterministic Cryptographic Hashing**: Canonical JSON formatting guarantees reproducible SHA-256 digests across any runtime.
 3. **Solana Devnet Anchoring**: The digest is anchored directly on-chain using the native **Solana Memo Program** (`MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr`), creating an immutable, timestamped audit trail without requiring smart contract redeployments.
 4. **Stakeholder Notification**: Generates a tamper-proof digital certificate and dispatches it in real-time via Telegram with direct [Solscan Devnet](https://solscan.io/?cluster=devnet) verification links.
@@ -25,7 +25,7 @@ sequenceDiagram
     autonumber
     actor Operator as Plant Operator / Camera
     participant API as FastAPI Orchestrator (main.py)
-    participant Vision as Gemini 1.5 Flash (vision_agent.py)
+    participant Vision as Vision AI: DeepSeek/Gemini/Claude (vision_agent.py)
     participant Web3 as Solana Oracle (web3_oracle.py)
     participant Memo as Solana Devnet (Memo Program)
     participant Notify as Telegram Bot (notifier.py)
@@ -158,7 +158,7 @@ Unified output returned to the HTTP client on `POST /api/v1/audit-meter`.
 | Method | Endpoint | Description | Content-Type |
 |---|---|---|---|
 | `GET` | `/` | API status, version, and documentation pointers | `application/json` |
-| `GET` | `/health` | Integration health status (Gemini, Solana, Telegram) | `application/json` |
+| `GET` | `/health` | Integration health status (Vision AI, Solana, Telegram) | `application/json` |
 | `POST` | `/api/v1/audit-meter` | Full physical-to-blockchain audit pipeline | `multipart/form-data` |
 | `POST` | `/api/v1/audit-meter-mock` | Synthetic test endpoint for frontend / offline testing | `application/json` |
 
@@ -166,9 +166,9 @@ Unified output returned to the HTTP client on `POST /api/v1/audit-meter`.
 
 ## 5. Mock Fallback Resilience Strategy
 
-In hackathon environments, third-party APIs (Gemini quota limits, Solana Devnet airdrop rate limits, Telegram bot setup) frequently cause blockers.
+In hackathon environments, third-party APIs (vision API quota limits, Solana Devnet airdrop rate limits, Telegram bot setup) frequently cause blockers.
 
 **EcoTrust Oracle guarantees zero-downtime development:**
-* If `GEMINI_API_KEY` is omitted or invalid, `core/vision_agent.py` automatically produces a high-fidelity synthetic reading.
+* If `VISION_API_KEY` is omitted or invalid, `core/vision_agent.py` automatically produces a high-fidelity synthetic reading.
 * If `SOLANA_PRIVATE_KEY` has 0 SOL or RPC airdrop is rate-limited, `core/web3_oracle.py` generates a mathematically valid signed transaction simulation and Solscan link with `is_simulated=true`.
 * If `TELEGRAM_BOT_TOKEN` is unset, `core/notifier.py` logs formatted HTML to the terminal without throwing exceptions.
