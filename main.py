@@ -95,6 +95,7 @@ app = FastAPI(
 # CORS configuration for cross-origin Hackathon frontends (e.g. Next.js, Vite/React)
 app.add_middleware(
     CORSMiddleware,
+    allow_origin_regex=r"^https?://.*",
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
