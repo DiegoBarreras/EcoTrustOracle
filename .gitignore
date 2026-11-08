@@ -16,6 +16,8 @@ env/
 *.pem
 *.key
 id.json
+oracle-devnet.json
+*keypair*.json
 
 # IDEs
 .idea/

@@ -194,6 +194,28 @@ Simulates the entire Solana Devnet anchoring & notification pipeline with synthe
 
 ---
 
+## 🛠 Web3 & Solana Devnet CLI Tools (Developer 2)
+
+### 1. Oracle Wallet Manager (`scripts/manage_wallet.py`)
+```bash
+# Generate dedicated Oracle keypair and automatically configure .env
+uv run python scripts/manage_wallet.py generate
+
+# Check Devnet balance in SOL and lamports
+uv run python scripts/manage_wallet.py balance
+
+# Request airdrop via RPC
+uv run python scripts/manage_wallet.py airdrop
+```
+
+### 2. On-Chain Memo Verifier (`scripts/verify_onchain_memo.py`)
+Downloads confirmed transactions directly from Solana Devnet, extracts the native Memo Program instruction, and cryptographically proves the reading's integrity to auditors and judges:
+```bash
+uv run python scripts/verify_onchain_memo.py <TX_SIGNATURE>
+```
+
+---
+
 ## 👥 Team Delegation
 
 Refer to [`AGENTS.md`](AGENTS.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md) for detailed tasks assigned to:

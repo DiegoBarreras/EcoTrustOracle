@@ -63,16 +63,27 @@ def compute_meter_hash(reading: Union[MeterReading, Dict[str, Any]]) -> str:
 
 def _load_or_generate_keypair() -> tuple[Keypair, bool]:
     """
-    Loads keypair from environment SOLANA_PRIVATE_KEY (base58 or JSON int array).
-    Generates a transient keypair if none is configured.
+    Loads keypair from environment SOLANA_PRIVATE_KEY (base58 or JSON int array),
+    or from local oracle-devnet.json. Generates a transient keypair if none is found.
 
     Returns:
         tuple[Keypair, bool]: (keypair, is_transient)
     """
+    from pathlib import Path
     settings = get_settings()
     pk_str = (settings.SOLANA_PRIVATE_KEY or "").strip()
 
     if not pk_str:
+        # Check local file fallback
+        local_wallet = Path("oracle-devnet.json")
+        if local_wallet.exists():
+            try:
+                raw_bytes = json.loads(local_wallet.read_text(encoding="utf-8"))
+                logger.info(f"🔑 [Web3Oracle] Loaded keypair from local file: {local_wallet}")
+                return Keypair.from_bytes(bytes(raw_bytes)), False
+            except Exception as e:
+                logger.warning(f"⚠️ [Web3Oracle] Error reading {local_wallet}: {e}")
+
         logger.info("ℹ️ [Web3Oracle] No SOLANA_PRIVATE_KEY found; generating transient keypair")
         return Keypair(), True
 
@@ -220,8 +231,18 @@ async def anchor_reading_to_solana(
         tx_signature = str(send_resp.value)
         solscan_url = f"{settings.SOLSCAN_BASE_URL}/{tx_signature}?cluster=devnet"
 
-        logger.info(f"🚀 [Web3Oracle] Anchored on Solana Devnet! Signature: {tx_signature}")
+        logger.info(f"🚀 [Web3Oracle] Broadcasted to Solana Devnet! Signature: {tx_signature}")
         logger.info(f"🔗 Solscan Proof URL: {solscan_url}")
+
+        # Await on-chain confirmation (sub-second on Solana)
+        try:
+            logger.info("⏳ [Web3Oracle] Awaiting on-chain confirmation on Devnet...")
+            from solders.signature import Signature
+            sig_obj = Signature.from_string(tx_signature)
+            await client.confirm_transaction(sig_obj, commitment="confirmed")
+            logger.info(f"✅ [Web3Oracle] Transaction confirmed on-chain!")
+        except Exception as confirm_err:
+            logger.warning(f"⚠️ [Web3Oracle] Non-blocking confirmation timeout: {confirm_err}")
 
         return OracleProof(
             data_hash=data_hash,
