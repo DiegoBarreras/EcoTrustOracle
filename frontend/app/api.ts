@@ -93,7 +93,7 @@ function detailToText(detail: unknown): string {
 export async function apiPost<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API}${path}`, init);
+    res = await fetch(`${API}${path}`, { method: "POST", ...init });
   } catch (netErr) {
     throw new ApiError(`No se pudo conectar con el backend (${API}): ${netErr instanceof Error ? netErr.message : String(netErr)}`);
   }
