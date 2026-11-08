@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+oracle-devnet.json
+id.json
+*.pem
+*.key
+.venv
+venv
+__pycache__
+.pytest_cache
+frontend
+tests
+scripts
+examples
