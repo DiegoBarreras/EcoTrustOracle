@@ -8,3 +8,7 @@ import os
 
 for _var in ("VISION_API_KEY", "GEMINI_API_KEY", "SOLANA_PRIVATE_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
     os.environ[_var] = ""
+
+# Isolated, throwaway audit history for the whole test session.
+import tempfile
+os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(prefix="ecotrust-test-"), "test.db")

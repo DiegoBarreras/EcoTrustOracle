@@ -243,8 +243,20 @@ Open [http://localhost:3000](http://localhost:3000) in your browser:
 * **JSON Body**: `MeterReading` schema (`value`, `unit`, `confidence`, `timestamp`, `source`, `device_id`).
 * **Query Parameters**: `previous_value`, `monthly_threshold`.
 
-### `POST /api/v1/verify`
-**Independent On-Chain Verification**: Recomputes the canonical SHA-256 hash from a submitted reading, queries the Solana Devnet RPC, and cryptographically proves whether the on-chain Memo and signer match.
+### History, comparison and consumption limits
+Send a `device_id` with any audit and the reading is stored (SQLite, `DB_PATH`) and compared with that meter's previous reading: consumption, elapsed time, daily rate vs. typical rate. Readings that look altered (counter going backwards, unit change, abnormal jump) are **still anchored as evidence**, flagged in `comparison.anomaly` and alerted on Telegram.
+* `GET /api/v1/devices`: audited meters.
+* `GET /api/v1/devices/{device_id}/history`: readings (oldest first) plus limit status.
+* `PUT /api/v1/devices/{device_id}/limit` `{"period": "day|week|month", "limit": 500, "unit": "kWh"}`: warning at 80 %, alert at 100 %, with end-of-period projection. `DELETE` removes it.
+
+### `POST /api/v1/bill-check`
+**AI bill comparison**: upload the current utility bill, optionally the previous bill and/or a meter photo (or a `device_id` to use its last stored reading). The vision model reads every field 3 times and keeps only fields all reads agree on; **code, not the model**, checks consumption arithmetic, estimated readings, bill vs. meter, continuity, period gaps, consumption and price changes, and estimates any overcharge. The model only writes the plain-language explanation. The checks are anchored on Solana and summarized to Telegram.
+
+### `POST /api/v1/verify` and `POST /api/v1/verify-payload`
+Independent verification: recompute the SHA-256 of a reading (or any anchored canonical JSON, e.g. a bill check), fetch the transaction and confirm the memo hash and the oracle signer.
+
+### `POST /api/v1/audit-meter-mock`
+Simulates the entire Solana Devnet anchoring & notification pipeline with synthetic data (ideal for frontend developers).
 
 ---
 

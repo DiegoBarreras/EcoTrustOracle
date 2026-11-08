@@ -144,6 +144,10 @@ def _generate_simulated_proof(
     )
 
 
+def _sha256_text(canonical: str) -> str:
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 async def anchor_reading_to_solana(
     reading: Union[MeterReading, Dict[str, Any]],
     force_simulated: bool = False,
@@ -152,29 +156,40 @@ async def anchor_reading_to_solana(
 ) -> OracleProof:
     """
     Cryptographically anchors the meter reading onto Solana Devnet.
-
-    Workflow:
-    1. Canonicalize reading and compute SHA-256 hash.
-    2. Format memo string payload: "EcoTrust:v1:<hash>".
-    3. Construct a Solana transaction calling the native Memo Program.
-    4. Sign and broadcast transaction on Solana Devnet.
-    5. Return Solscan URL and proof metadata.
+    Canonicalizes the reading and delegates to anchor_payload, so the hash and
+    memo are sha256(canonical_json(reading)) and "EcoTrust:v1:<hash>".
 
     Args:
         reading: MeterReading instance or dict.
         force_simulated: Return a simulated proof without touching the RPC or wallet
             (used for synthetic/mock readings that must never be anchored).
         client: Optional existing AsyncClient connection.
+        compliance: Optional ESGCompliance; its status is appended to the memo as an on-chain tag.
+    """
+    tag = getattr(compliance, "status", None) if compliance is not None else None
+    return await anchor_payload(canonical_json(reading), force_simulated=force_simulated, client=client, memo_tag=tag)
 
-    Returns:
-        OracleProof: Validated model containing data_hash, tx_signature, and solscan_url.
+
+async def anchor_payload(
+    canonical: str,
+    force_simulated: bool = False,
+    client: Optional[AsyncClient] = None,
+    memo_tag: Optional[str] = None,
+) -> OracleProof:
+    """
+    Anchors any canonical UTF-8 string (a reading, a bill check...) onto Solana Devnet.
+
+    Workflow:
+    1. Compute SHA-256 of the canonical string.
+    2. Format memo string payload: "EcoTrust:v1:<hash>".
+    3. Construct a Solana transaction calling the native Memo Program.
+    4. Sign and broadcast transaction on Solana Devnet.
+    5. Return Solscan URL and proof metadata (canonical_json = canonical).
     """
     settings = get_settings()
-    canonical = canonical_json(reading)
-    data_hash = compute_meter_hash(reading)
-    memo_payload = f"{MEMO_PREFIX}{data_hash}"
-    if compliance is not None and getattr(compliance, "status", None):
-        memo_payload = f"{MEMO_PREFIX}{data_hash}:{compliance.status}"
+    data_hash = _sha256_text(canonical)
+    # Optional status tag (e.g. ":EXCEEDED"); verification only compares the part before ":".
+    memo_payload = f"{MEMO_PREFIX}{data_hash}:{memo_tag}" if memo_tag else f"{MEMO_PREFIX}{data_hash}"
 
     if force_simulated:
         return _generate_simulated_proof(
@@ -353,13 +368,36 @@ def _extract_fee_payer(tx: Dict[str, Any]) -> Optional[str]:
 async def verify_anchor(reading: MeterReading, tx_signature: str) -> VerifyResult:
     """
     Independently re-checks that `reading` was anchored by this oracle in `tx_signature`:
-    recomputes the canonical JSON and SHA-256, fetches the transaction from the RPC and
-    compares the EcoTrust memo hash and the fee payer. Never raises for normal failures.
+    recomputes the canonical JSON and delegates to verify_payload.
     """
+    return await verify_payload(canonical_json(reading), tx_signature)
+
+
+async def verify_payload(canonical: str, tx_signature: str) -> VerifyResult:
+    """
+    Independently re-checks that the canonical string was anchored by this oracle in
+    `tx_signature`: recomputes SHA-256, fetches the transaction from the RPC and compares
+    the EcoTrust memo hash and the fee payer. Never raises.
+    """
+    tx_signature = str(tx_signature or "").strip()
+    canonical = canonical if isinstance(canonical, str) else str(canonical)
+    try:
+        return await _verify_payload(canonical, tx_signature)
+    except Exception as exc:
+        logger.warning(f"[Web3Oracle] verify_payload unexpected failure for {tx_signature}: {type(exc).__name__}")
+        return VerifyResult(
+            valid=False,
+            tx_signature=tx_signature,
+            computed_hash=_sha256_text(canonical),
+            canonical_json=canonical,
+            checks={name: False for name in _VERIFY_CHECKS},
+            detail=f"Verificacion fallida: error inesperado ({type(exc).__name__}).",
+        )
+
+
+async def _verify_payload(canonical: str, tx_signature: str) -> VerifyResult:
     settings = get_settings()
-    tx_signature = (tx_signature or "").strip()
-    canonical = canonical_json(reading)
-    computed = compute_meter_hash(reading)
+    computed = _sha256_text(canonical)
     checks = {name: False for name in _VERIFY_CHECKS}
 
     def result(detail: str, memo_hash=None, signer=None, expected=None) -> VerifyResult:
@@ -408,7 +446,7 @@ async def verify_anchor(reading: MeterReading, tx_signature: str) -> VerifyResul
     checks["signer_matches"] = expected_signer is not None and signer == expected_signer
 
     if all(checks.values()):
-        detail = "Verificacion correcta: la lectura coincide con el hash anclado en Solana por este oraculo."
+        detail = "Verificacion correcta: los datos coinciden con el hash anclado en Solana por este oraculo."
     else:
         problems = []
         if not checks["tx_succeeded"]:
@@ -416,7 +454,7 @@ async def verify_anchor(reading: MeterReading, tx_signature: str) -> VerifyResul
         if not checks["memo_found"]:
             problems.append("no contiene un memo EcoTrust:v1")
         elif not checks["hash_matches"]:
-            problems.append("el hash del memo no coincide con la lectura enviada")
+            problems.append("el hash del memo no coincide con los datos enviados")
         if expected_signer is None:
             problems.append("el oraculo no tiene una billetera fija configurada para comparar el firmante")
         elif not checks["signer_matches"]:

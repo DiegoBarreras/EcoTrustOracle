@@ -6,7 +6,7 @@ Vision Agent -> Web3 Oracle -> Notifier -> Orchestrator (FastAPI).
 
 import math
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -204,6 +204,155 @@ class VisionAnalysis(BaseModel):
     reads: List[VisionRead] = Field(default_factory=list, description="Every independent read, including dissenting or failed ones")
 
 
+class VerifyPayloadRequest(BaseModel):
+    """Input of POST /api/v1/verify-payload: any anchored canonical JSON (e.g. a bill check) and its transaction."""
+    canonical_json: str = Field(..., min_length=2, max_length=100_000)
+    tx_signature: str = Field(..., min_length=32, max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# History, comparison with the previous reading, consumption limits
+# ---------------------------------------------------------------------------
+
+AnomalyCode = Literal["reading_below_previous", "unit_mismatch", "abnormal_jump"]
+LimitPeriod = Literal["day", "week", "month"]
+
+
+class PreviousReading(BaseModel):
+    """The reading this audit is compared against."""
+    value: float
+    unit: str
+    timestamp: str
+    tx_signature: Optional[str] = None
+    is_simulated: bool = False
+    origin: Literal["history", "client"] = Field(
+        default="history",
+        description="'history' = last stored reading of this device; 'client' = previous_value sent with the request",
+    )
+
+
+class ReadingComparison(BaseModel):
+    """Current vs previous reading of a cumulative meter. Suspicious readings are still anchored, but flagged."""
+    previous: PreviousReading
+    consumption: float = Field(..., description="current value - previous value (negative means the counter went backwards)")
+    elapsed_hours: Optional[float] = Field(default=None, description="Hours between both readings (None if unknown)")
+    daily_rate: Optional[float] = Field(default=None, description="Consumption per 24 h over the elapsed time")
+    typical_daily_rate: Optional[float] = Field(default=None, description="Median daily rate of this device's history")
+    anomaly: Optional[AnomalyCode] = Field(default=None, description="Why this reading looks altered or wrong, if it does")
+    anomaly_message: Optional[str] = Field(default=None, description="Spanish explanation of the anomaly")
+
+
+class ConsumptionLimit(BaseModel):
+    """Consumption budget for one device and period (body of PUT /api/v1/devices/{device_id}/limit)."""
+    period: LimitPeriod
+    limit: float = Field(..., gt=0, allow_inf_nan=False)
+    unit: str = Field(..., min_length=1, max_length=32)
+
+
+class LimitStatus(BaseModel):
+    """How much of the period budget is used. warning >= 80 %, exceeded >= 100 %."""
+    period: LimitPeriod
+    period_start: str = Field(..., description="ISO 8601 UTC start of the current period")
+    limit: float
+    unit: str
+    used: float = Field(..., description="Consumption since the period started")
+    percent: float = Field(..., description="used / limit * 100")
+    status: Literal["ok", "warning", "exceeded"]
+    projected: Optional[float] = Field(default=None, description="Projected consumption at the end of the period")
+
+
+class HistoryEntry(BaseModel):
+    """One stored audit of a device."""
+    id: int
+    value: float
+    unit: str
+    timestamp: str
+    source: str
+    confidence: float
+    data_hash: str
+    tx_signature: str
+    is_simulated: bool
+    consumption: Optional[float] = None
+    anomaly: Optional[AnomalyCode] = None
+
+
+class DeviceSummary(BaseModel):
+    """Row of GET /api/v1/devices."""
+    device_id: str
+    last_value: float
+    unit: str
+    last_timestamp: str
+    count: int
+    anomalies: int = Field(default=0, description="Stored readings flagged as anomalous")
+
+
+class DeviceHistory(BaseModel):
+    """GET /api/v1/devices/{device_id}/history: readings oldest first, plus the limit and its status."""
+    device_id: str
+    entries: List[HistoryEntry]
+    limit: Optional[ConsumptionLimit] = None
+    limit_status: Optional[LimitStatus] = None
+
+
+# ---------------------------------------------------------------------------
+# Bill check: utility bill vs previous bill and/or meter photo
+# ---------------------------------------------------------------------------
+
+class BillFields(BaseModel):
+    """Fields read from a utility bill. A field is None when it is absent or the reads did not agree."""
+    provider: Optional[str] = None
+    account_number: Optional[str] = None
+    meter_serial: Optional[str] = None
+    period_start: Optional[str] = Field(default=None, description="ISO date YYYY-MM-DD")
+    period_end: Optional[str] = Field(default=None, description="ISO date YYYY-MM-DD")
+    previous_reading: Optional[float] = None
+    current_reading: Optional[float] = None
+    billed_consumption: Optional[float] = None
+    unit: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = None
+    reading_type: Optional[Literal["actual", "estimated"]] = Field(default=None, description="Real meter reading or utility estimate")
+
+
+class BillExtraction(BaseModel):
+    """AI extraction of one bill, with per-field consensus over independent reads."""
+    fields: BillFields
+    disputed: List[str] = Field(default_factory=list, description="Fields the independent reads did not agree on (set to None)")
+    votes: int = Field(..., description="Reads that returned usable JSON")
+    total_reads: int
+    model: str
+    image_sha256: str = Field(..., description="SHA-256 of the uploaded bill image bytes")
+    notes: Optional[str] = Field(default=None, description="Model's observations about the bill (Spanish)")
+    is_mock: bool = False
+
+
+class BillCheckItem(BaseModel):
+    """One arithmetic/consistency check. Decided by code, never by the model."""
+    name: str = Field(..., description="Stable id, e.g. 'consumption_arithmetic', 'meter_vs_bill', 'continuity'")
+    label: str = Field(..., description="Spanish title for the UI")
+    status: Literal["match", "mismatch", "not_checkable"]
+    expected: Optional[str] = None
+    actual: Optional[str] = None
+    detail: str = Field(..., description="Spanish explanation")
+
+
+class BillCheckResult(BaseModel):
+    """POST /api/v1/bill-check output."""
+    bill: BillExtraction
+    previous_bill: Optional[BillExtraction] = None
+    meter_reading: Optional[MeterReading] = None
+    meter_vision: Optional[VisionAnalysis] = None
+    checks: List[BillCheckItem]
+    verdict: Literal["consistent", "discrepancies", "inconclusive"]
+    overcharge_estimate: Optional[float] = Field(default=None, description="Estimated amount billed in excess, computed by code")
+    currency: Optional[str] = None
+    explanation: str = Field(..., description="Plain-language Spanish summary (written by the model from the code's checks)")
+    canonical_json: Optional[str] = Field(default=None, description="Exact string hashed and anchored on Solana")
+    oracle_proof: Optional[OracleProof] = None
+    notification: Optional[NotificationResult] = None
+
+
+
 class ESGCompliance(BaseModel):
     """
     Evaluates net period consumption (reading.value - previous_value) against
@@ -288,7 +437,15 @@ class AuditResponse(BaseModel):
     )
     consumption: Optional[float] = Field(
         default=None,
-        description="reading.value - previous_value, when the client sent the previous counter reading",
+        description="Same as comparison.consumption (kept for older clients)",
+    )
+    comparison: Optional[ReadingComparison] = Field(
+        default=None,
+        description="Comparison with the previous reading of this device (history or client-provided)",
+    )
+    limit_status: Optional[LimitStatus] = Field(
+        default=None,
+        description="Consumption limit status of this device after this reading",
     )
     compliance: Optional[ESGCompliance] = Field(
         default=None,

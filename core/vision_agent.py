@@ -217,22 +217,28 @@ def detect_provider(api_key: str) -> Tuple[str, str]:
     )
 
 
-def _call_claude(api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> str:
+def is_vision_key_configured(api_key: Optional[str]) -> bool:
+    """False for a missing key or a placeholder copied from .env.example (the mock path applies then)."""
+    key = (api_key or "").strip()
+    return bool(key) and key != "your_gemini_api_key_here" and not key.startswith("your_")
+
+
+def _call_claude(
+    api_key: str, model: str, prompt: str, image_b64: Optional[str], mime_type: str, system: str = SYSTEM_INSTRUCTION
+) -> str:
+    """image_b64=None sends a text-only request."""
     import anthropic
 
+    content = [{"type": "text", "text": prompt}]
+    if image_b64 is not None:
+        content.insert(0, {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": image_b64}})
     # Server-side refusal fallback; Haiku has none, so it is only sent for the larger models.
     fallback = {} if model.startswith("claude-haiku") else {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
     response = anthropic.Anthropic(api_key=api_key).beta.messages.create(
         model=model,
         max_tokens=16000,
-        system=SYSTEM_INSTRUCTION,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": image_b64}},
-                {"type": "text", "text": prompt},
-            ],
-        }],
+        system=system,
+        messages=[{"role": "user", "content": content}],
         **fallback,
     )
     if response.stop_reason == "refusal":
@@ -246,35 +252,26 @@ RETIRED_GEMINI_MODELS = ("gemini-1.5-flash", "gemini-1.5-pro")
 GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest"
 
 
-def _call_gemini_native(api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> Tuple[str, str]:
+def _call_gemini_native(
+    api_key: str, model: str, prompt: str, image_b64: Optional[str], mime_type: str, system: str = SYSTEM_INSTRUCTION
+) -> Tuple[str, str]:
     """
-    Native Gemini v1beta generateContent with JSON output. Tries the requested model first and falls back
-    to GEMINI_FALLBACK_MODEL when it is overloaded or out of quota. Returns (text, model actually used).
+    Native Gemini v1beta generateContent (JSON output for image reads, plain text when image_b64 is None).
+    Tries the requested model first and falls back to GEMINI_FALLBACK_MODEL when it is overloaded or out
+    of quota. Returns (text, model actually used).
     """
     import requests
 
     chosen_model = model if model and model not in RETIRED_GEMINI_MODELS else GEMINI_DEFAULT_MODEL
+    parts: List[Dict[str, Any]] = [{"text": prompt}]
+    generation_config: Dict[str, Any] = {"temperature": 0.1}
+    if image_b64 is not None:
+        parts.append({"inline_data": {"mime_type": mime_type, "data": image_b64}})
+        generation_config["response_mime_type"] = "application/json"
     payload = {
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_INSTRUCTION}]
-        },
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": image_b64
-                        }
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "response_mime_type": "application/json"
-        }
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"parts": parts}],
+        "generationConfig": generation_config,
     }
     attempts = list(dict.fromkeys((chosen_model, GEMINI_FALLBACK_MODEL)))  # dedupe, keep order
     for i, attempt in enumerate(attempts):
@@ -300,14 +297,19 @@ def _call_gemini_native(api_key: str, model: str, prompt: str, image_b64: str, m
     return data["candidates"][0]["content"]["parts"][0]["text"], data.get("modelVersion", attempt)
 
 
-def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, image_b64: str, mime_type: str) -> Tuple[str, str]:
-    """Gemini and DeepSeek both accept the OpenAI chat/completions format with base64 image_url parts.
-    Returns (text, model actually used)."""
+def _call_openai_compatible(
+    url: str, api_key: str, model: str, prompt: str, image_b64: Optional[str], mime_type: str, system: str = SYSTEM_INSTRUCTION
+) -> Tuple[str, str]:
+    """Gemini and DeepSeek both accept the OpenAI chat/completions format with base64 image_url parts
+    (text-only when image_b64 is None). Returns (text, model actually used)."""
     import requests
 
     if "googleapis.com" in url:
-        return _call_gemini_native(api_key, model, prompt, image_b64, mime_type)
+        return _call_gemini_native(api_key, model, prompt, image_b64, mime_type, system)
 
+    user_content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+    if image_b64 is not None:
+        user_content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}})
     response = requests.post(
         url,
         headers={"Authorization": f"Bearer {api_key}"},
@@ -315,11 +317,8 @@ def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, ima
             "model": model,
             "temperature": 0.1,  # Low temperature for deterministic meter readout
             "messages": [
-                {"role": "system", "content": SYSTEM_INSTRUCTION},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
-                ]},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
             ],
         },
         timeout=60,
@@ -328,28 +327,45 @@ def _call_openai_compatible(url: str, api_key: str, model: str, prompt: str, ima
     return response.json()["choices"][0]["message"]["content"] or "", model
 
 
+def _provider_call(system: str, prompt: str, image_b64: Optional[str], mime_type: str) -> Tuple[str, str, str]:
+    """One request to the provider picked from the VISION_API_KEY prefix. Returns (text, model used, provider)."""
+    settings = get_settings()
+    provider, default_model = detect_provider(settings.VISION_API_KEY)
+    model = settings.VISION_MODEL or default_model
+    # Positional arguments only: tests replace these functions with plain lambdas.
+    if provider == "claude":
+        return _call_claude(settings.VISION_API_KEY, model, prompt, image_b64, mime_type, system), model, provider
+    text, used_model = _call_openai_compatible(
+        OPENAI_COMPATIBLE_URLS[provider], settings.VISION_API_KEY, model, prompt, image_b64, mime_type, system
+    )
+    return text, used_model, provider
+
+
+def _sync_text_call(system: str, prompt: str) -> str:
+    """Text-only request (no image) with the same provider, key, model and fallback logic. Returns stripped text."""
+    text, _, _ = _provider_call(system, prompt, None, "text/plain")
+    return (text or "").strip()
+
+
 def _sync_vision_call(
     image_bytes: bytes,
     mime_type: str = "image/jpeg",
     custom_hint: Optional[str] = None,
+    *,
+    system: Optional[str] = None,
+    prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Synchronous worker executed in a thread pool to avoid blocking the asyncio loop.
     Picks Gemini, Claude or DeepSeek from the VISION_API_KEY prefix.
+    system/prompt default to the meter-reading instruction; other agents (e.g. bills) pass their own.
     """
-    settings = get_settings()
-    provider, default_model = detect_provider(settings.VISION_API_KEY)
-    model = settings.VISION_MODEL or default_model
-
-    prompt = "Inspect this industrial meter and extract the exact reading, unit, confidence, obstruction_ratio, and meter_type."
+    if prompt is None:
+        prompt = "Inspect this industrial meter and extract the exact reading, unit, confidence, obstruction_ratio, and meter_type."
     if custom_hint:
         prompt += f" Meter operator note / context: {custom_hint}"
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-
-    if provider == "claude":
-        text, used_model = _call_claude(settings.VISION_API_KEY, model, prompt, image_b64, mime_type), model
-    else:
-        text, used_model = _call_openai_compatible(OPENAI_COMPATIBLE_URLS[provider], settings.VISION_API_KEY, model, prompt, image_b64, mime_type)
+    text, used_model, provider = _provider_call(system or SYSTEM_INSTRUCTION, prompt, image_b64, mime_type)
 
     # Keep only the JSON object, in case the model wraps it in Markdown fences or prose.
     start, end = text.find("{"), text.rfind("}")
@@ -395,8 +411,7 @@ async def analyze_meter_image(
     """
     settings = get_settings()
 
-    api_key = (settings.VISION_API_KEY or "").strip()
-    if not api_key or api_key == "your_gemini_api_key_here" or api_key.startswith("your_"):
+    if not is_vision_key_configured(settings.VISION_API_KEY):
         if settings.VISION_MOCK_FALLBACK:
             mock = _get_mock_meter_reading(reason="VISION_API_KEY not configured or placeholder detected")
             return mock, VisionAnalysis(model="mock", votes=0, total_reads=0, is_mock=True)

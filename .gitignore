@@ -36,3 +36,9 @@ htmlcov/
 
 # Logs
 *.log
+
+# Local audit history database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

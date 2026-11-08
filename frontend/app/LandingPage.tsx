@@ -121,22 +121,22 @@ export function LandingPage({
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
-            <div className="text-2xl">📸</div>
+            <div className="text-2xl"></div>
             <h3 className="font-bold text-slate-100">{t.howItWorks.step1Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.howItWorks.step1Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
-            <div className="text-2xl">🤖</div>
+            <div className="text-2xl"></div>
             <h3 className="font-bold text-slate-100">{t.howItWorks.step2Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.howItWorks.step2Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
-            <div className="text-2xl">⛓️</div>
+            <div className="text-2xl"></div>
             <h3 className="font-bold text-slate-100">{t.howItWorks.step3Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.howItWorks.step3Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
-            <div className="text-2xl">📱</div>
+            <div className="text-2xl"></div>
             <h3 className="font-bold text-slate-100">{t.howItWorks.step4Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.howItWorks.step4Desc}</p>
           </div>
@@ -152,32 +152,26 @@ export function LandingPage({
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 space-y-2">
-            <span className="inline-block rounded-md bg-emerald-500/10 p-2 text-emerald-400 font-bold text-base">💰</span>
             <h3 className="font-bold text-slate-100">{t.features.f1Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.features.f1Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 space-y-2">
-            <span className="inline-block rounded-md bg-emerald-500/10 p-2 text-emerald-400 font-bold text-base">🛑</span>
             <h3 className="font-bold text-slate-100">{t.features.f2Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.features.f2Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 space-y-2">
-            <span className="inline-block rounded-md bg-emerald-500/10 p-2 text-emerald-400 font-bold text-base">🚨</span>
             <h3 className="font-bold text-slate-100">{t.features.f3Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.features.f3Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 space-y-2">
-            <span className="inline-block rounded-md bg-emerald-500/10 p-2 text-emerald-400 font-bold text-base">🧠</span>
             <h3 className="font-bold text-slate-100">{t.features.f4Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.features.f4Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 space-y-2">
-            <span className="inline-block rounded-md bg-emerald-500/10 p-2 text-emerald-400 font-bold text-base">🔍</span>
             <h3 className="font-bold text-slate-100">{t.features.f5Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.features.f5Desc}</p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 space-y-2">
-            <span className="inline-block rounded-md bg-emerald-500/10 p-2 text-emerald-400 font-bold text-base">⚡</span>
             <h3 className="font-bold text-slate-100">{t.features.f6Title}</h3>
             <p className="text-xs text-slate-400 leading-relaxed">{t.features.f6Desc}</p>
           </div>
