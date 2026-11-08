@@ -48,6 +48,7 @@ from core.schemas import (
     VerifyRequest,
     VerifyResult,
     VisionAnalysis,
+    evaluate_compliance,
 )
 from core.vision_agent import analyze_meter_image, VisionExtractionError
 from core.web3_oracle import anchor_payload, anchor_reading_to_solana, verify_anchor, verify_payload, SolanaOracleError
@@ -248,6 +249,7 @@ async def _run_audit(
     telegram_chat_id: Optional[str],
     previous_value: Optional[float] = None,
     vision: Optional[VisionAnalysis] = None,
+    monthly_threshold: Optional[float] = None,
     synthetic: bool = False,
 ) -> AuditResponse:
     """
@@ -255,10 +257,13 @@ async def _run_audit(
     Synthetic readings (mock vision, mock endpoint) are never written to Solana nor to the history.
     """
     comparison = None if synthetic and previous_value is None else await _compare_with_previous(reading, previous_value)
+    consumption = comparison.consumption if comparison else None
+    threshold = monthly_threshold if monthly_threshold is not None else settings.ESG_MONTHLY_THRESHOLD
+    compliance = evaluate_compliance(consumption, threshold, reading.unit)
 
     try:
         logger.info(f"[Pipeline] Anchoring reading on Solana Devnet: {reading.value} {reading.unit}")
-        oracle_proof = await anchor_reading_to_solana(reading, force_simulated=synthetic)
+        oracle_proof = await anchor_reading_to_solana(reading, force_simulated=synthetic, compliance=compliance)
     except SolanaOracleError as err:
         logger.error(f"Web3 Oracle failed: {err}")
         raise HTTPException(
@@ -282,6 +287,8 @@ async def _run_audit(
             is_simulated=oracle_proof.is_simulated,
             comparison=comparison,
             limit_status=limit_status,
+            consumption=consumption,
+            compliance=compliance,
         )
     except NotificationError as err:
         # Partial success: the proof exists even though the alert was not delivered.
@@ -298,9 +305,10 @@ async def _run_audit(
         notification=notification,
         execution_time_ms=elapsed_ms,
         vision=vision,
-        consumption=comparison.consumption if comparison else None,
+        consumption=consumption,
         comparison=comparison,
         limit_status=limit_status,
+        compliance=compliance,
     )
 
 
@@ -326,6 +334,7 @@ async def audit_meter(
     meter_hint: Optional[str] = Form(None, max_length=500, description="Optional context (e.g. 'Main boiler gas flowmeter')"),
     device_id: Optional[str] = Form(None, max_length=128, description="Meter / asset tag; enables history, comparison and limits"),
     previous_value: Optional[float] = Form(None, description="Override: previous counter reading (otherwise taken from history)"),
+    monthly_threshold: Optional[float] = Form(None, description="Expected monthly consumption threshold (defaults to ESG_MONTHLY_THRESHOLD)"),
     telegram_chat_id: Optional[str] = Form(None, description="Optional Telegram chat ID override for alerts"),
 ):
     start_time = time.perf_counter()
@@ -347,7 +356,13 @@ async def audit_meter(
 
     reading.device_id = _clean_device_id(device_id)
     return await _run_audit(
-        reading, start_time, telegram_chat_id, previous_value=previous_value, vision=vision, synthetic=vision.is_mock
+        reading,
+        start_time,
+        telegram_chat_id,
+        previous_value=previous_value,
+        vision=vision,
+        monthly_threshold=monthly_threshold,
+        synthetic=vision.is_mock,
     )
 
 
@@ -366,6 +381,7 @@ async def audit_meter(
 async def audit_sensor(
     reading: MeterReading,
     previous_value: Optional[float] = None,
+    monthly_threshold: Optional[float] = None,
     telegram_chat_id: Optional[str] = None,
 ):
     """
@@ -383,7 +399,9 @@ async def audit_sensor(
     if reading.source == "ai_vision":
         reading.source = "iot_sensor"
 
-    return await _run_audit(reading, start_time, telegram_chat_id, previous_value=previous_value)
+    return await _run_audit(
+        reading, start_time, telegram_chat_id, previous_value=previous_value, monthly_threshold=monthly_threshold
+    )
 
 
 @app.post(

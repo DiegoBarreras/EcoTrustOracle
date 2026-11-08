@@ -60,6 +60,11 @@ class Settings(BaseSettings):
         description="Enable simulated Devnet transaction anchoring if wallet has no SOL or RPC is unreachable",
     )
 
+    ESG_MONTHLY_THRESHOLD: Optional[float] = Field(
+        default=None,
+        description="Default monthly consumption threshold for ESG compliance audits",
+    )
+
     # Notifications (Telegram Bot API)
     TELEGRAM_BOT_TOKEN: Optional[str] = Field(
         default=None,

@@ -129,6 +129,7 @@ export default function Home() {
     if (busy) return;
     const form = new FormData(e.currentTarget);
     const prev = String(form.get("previous_value") ?? "").trim();
+    const thresh = String(form.get("monthly_threshold") ?? "").trim();
     const mode = tab === "sensor" ? "sensor" : "meter";
     if (mode === "meter" && !file) {
       setError("Primero toma o sube una foto del medidor.");
@@ -151,9 +152,13 @@ export default function Home() {
         if (hint) body.set("meter_hint", hint);
         if (dev) body.set("device_id", dev);
         if (prev) body.set("previous_value", prev);
+        if (thresh) body.set("monthly_threshold", thresh);
         res = await apiPost<AuditResponse>("/api/v1/audit-meter", { body });
       } else {
-        const qs = prev ? `?previous_value=${encodeURIComponent(prev)}` : "";
+        const params = new URLSearchParams();
+        if (prev) params.set("previous_value", prev);
+        if (thresh) params.set("monthly_threshold", thresh);
+        const qs = params.toString() ? `?${params.toString()}` : "";
         res = await apiPostJson<AuditResponse>(`/api/v1/audit-sensor${qs}`, {
           value: Number(form.get("value")),
           unit: String(form.get("unit") ?? "").trim(),
@@ -263,6 +268,7 @@ export default function Home() {
                   />
                   <DeviceIdField value={deviceId} onChange={setDeviceId} placeholder="Ej: MED-001" />
                   <Field id="meter_hint" label="Nota (opcional)" placeholder="Ej: Caldera principal" />
+                  <Field id="monthly_threshold" label="Umbral mensual ESG (opcional)" type="number" step="any" min="0" placeholder="Ej: 250" />
                 </>
               ) : (
                 <>
@@ -272,6 +278,7 @@ export default function Home() {
                     <Field id="unit" label="Unidad" required placeholder="kWh, m3..." />
                   </div>
                   <Field id="confidence" label="Confianza (0 a 1)" type="number" step="0.01" min="0" max="1" defaultValue="1" required />
+                  <Field id="monthly_threshold" label="Umbral mensual ESG (opcional)" type="number" step="any" min="0" placeholder="Ej: 250" />
                 </>
               )}
               <Field

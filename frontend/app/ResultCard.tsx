@@ -97,6 +97,47 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
         {result.status === "partial_success" && (
           <p className="mt-2 text-xs text-amber-300">Auditoría parcial: alguna etapa (anclaje o notificación) no se completó del todo.</p>
         )}
+        {result.compliance && (
+          <div className="mt-3">
+            {result.compliance.is_breach ? (
+              <div className="rounded-lg border-2 border-red-500 bg-red-950/70 p-3.5 text-sm text-red-200">
+                <div className="flex items-center justify-between font-bold text-red-100">
+                  <span className="flex items-center gap-1.5">
+                    Umbral mensual excedido (+{result.compliance.excess_percentage}%)
+                  </span>
+                  <span className="rounded bg-red-500 px-2 py-0.5 text-xs uppercase font-black text-white">Incumplimiento</span>
+                </div>
+                <p className="mt-1 text-xs text-red-300">
+                  El consumo calculado ({result.compliance.consumption} {reading.unit}) superó el umbral de {result.compliance.threshold} {reading.unit}.
+                  {result.oracle_proof.is_simulated
+                    ? "Infracción registrada; el anclaje fue simulado (no está en Solana)."
+                    : <>Infracción anclada en Solana con tag <code>:EXCEEDED</code>.</>}
+                </p>
+                <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-900">
+                  <div className="h-full bg-red-500" style={{ width: "100%" }} />
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-emerald-500/60 bg-emerald-950/60 p-3.5 text-sm text-emerald-200">
+                <div className="flex items-center justify-between font-bold text-emerald-100">
+                  <span className="flex items-center gap-1.5">
+                    Cumplimiento ESG conforme
+                  </span>
+                  <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-xs uppercase font-bold text-emerald-300">En Regla</span>
+                </div>
+                <p className="mt-1 text-xs text-emerald-300">
+                  Consumo ({result.compliance.consumption} {reading.unit}) dentro del umbral de {result.compliance.threshold} {reading.unit}.
+                </p>
+                <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-900">
+                  <div
+                    className="h-full bg-emerald-400"
+                    style={{ width: `${Math.min(100, Math.round((result.compliance.consumption / result.compliance.threshold) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <div className="mt-4">
           <ConfidenceBar value={reading.confidence} />
         </div>

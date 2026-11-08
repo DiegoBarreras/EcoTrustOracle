@@ -112,6 +112,15 @@ export type DeviceHistory = {
   limit_status: LimitStatus | null;
 };
 
+export type ESGCompliance = {
+  threshold: number;
+  consumption: number;
+  is_breach: boolean;
+  excess_percentage: number | null;
+  status: "COMPLIANT" | "EXCEEDED";
+  detail: string;
+};
+
 export type AuditResponse = {
   status: "success" | "partial_success" | string;
   reading: Reading;
@@ -122,6 +131,7 @@ export type AuditResponse = {
   consumption: number | null;
   comparison: ReadingComparison | null;
   limit_status: LimitStatus | null;
+  compliance?: ESGCompliance | null;
 };
 
 export type VerifyResult = {
@@ -224,9 +234,9 @@ async function request<T>(method: string, path: string, init: RequestInit = {}):
   const text = await res.text().catch(() => "");
   let body: unknown = null;
   try {
-    body = text ? JSON.parse(text) : null;
+    body = await res.json();
   } catch {
-    body = null;
+    /* empty */
   }
   if (res.ok) {
     if (body === null) throw new ApiError(`Respuesta no válida del backend (HTTP ${res.status})`, res.status);

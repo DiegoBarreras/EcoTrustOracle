@@ -152,6 +152,7 @@ async def anchor_reading_to_solana(
     reading: Union[MeterReading, Dict[str, Any]],
     force_simulated: bool = False,
     client: Optional[AsyncClient] = None,
+    compliance: Optional[Any] = None,
 ) -> OracleProof:
     """
     Cryptographically anchors the meter reading onto Solana Devnet.
@@ -163,14 +164,17 @@ async def anchor_reading_to_solana(
         force_simulated: Return a simulated proof without touching the RPC or wallet
             (used for synthetic/mock readings that must never be anchored).
         client: Optional existing AsyncClient connection.
+        compliance: Optional ESGCompliance; its status is appended to the memo as an on-chain tag.
     """
-    return await anchor_payload(canonical_json(reading), force_simulated=force_simulated, client=client)
+    tag = getattr(compliance, "status", None) if compliance is not None else None
+    return await anchor_payload(canonical_json(reading), force_simulated=force_simulated, client=client, memo_tag=tag)
 
 
 async def anchor_payload(
     canonical: str,
     force_simulated: bool = False,
     client: Optional[AsyncClient] = None,
+    memo_tag: Optional[str] = None,
 ) -> OracleProof:
     """
     Anchors any canonical UTF-8 string (a reading, a bill check...) onto Solana Devnet.
@@ -184,7 +188,8 @@ async def anchor_payload(
     """
     settings = get_settings()
     data_hash = _sha256_text(canonical)
-    memo_payload = f"{MEMO_PREFIX}{data_hash}"
+    # Optional status tag (e.g. ":EXCEEDED"); verification only compares the part before ":".
+    memo_payload = f"{MEMO_PREFIX}{data_hash}:{memo_tag}" if memo_tag else f"{MEMO_PREFIX}{data_hash}"
 
     if force_simulated:
         return _generate_simulated_proof(
@@ -347,7 +352,8 @@ def _extract_memo_hash(tx: Dict[str, Any], memo_program_id: str) -> Optional[str
             continue
         text = ix.get("parsed")
         if isinstance(text, str) and text.startswith(MEMO_PREFIX):
-            return text[len(MEMO_PREFIX):].strip()
+            raw = text[len(MEMO_PREFIX):].strip()
+            return raw.split(":")[0] if ":" in raw else raw
     return None
 
 
