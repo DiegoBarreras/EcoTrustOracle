@@ -163,14 +163,14 @@ def test_compare_reading_below_previous():
     assert c.anomaly == "reading_below_previous"
     assert c.consumption == -379.5
     assert c.daily_rate is None
-    for piece in ("120.5 kWh", "500 kWh", "08/11 02:00 UTC", "Se registro y anclo igualmente"):
+    for piece in ("120.5 kWh", "500 kWh", "08/11 02:00 UTC", "Se registro igualmente como evidencia"):
         assert piece in c.anomaly_message
 
 
 def test_compare_unit_mismatch_takes_precedence():
     c = analytics.compare(_reading(50, "2026-11-08T03:00:00Z", unit="L"), _prev(500, "2026-11-08T02:00:00Z", unit="m3"), [])
     assert c.anomaly == "unit_mismatch"
-    for piece in ("50 L", "500 m3", "Se registro y anclo igualmente"):
+    for piece in ("50 L", "500 m3", "Se registro igualmente como evidencia"):
         assert piece in c.anomaly_message
 
 
@@ -187,7 +187,7 @@ def test_compare_abnormal_jump():
     assert c.typical_daily_rate == 10
     assert c.daily_rate == 60
     assert c.anomaly == "abnormal_jump"
-    for piece in ("60 kWh", "10 kWh/dia", "Se registro y anclo igualmente"):
+    for piece in ("60 kWh", "10 kWh/dia", "Se registro igualmente como evidencia"):
         assert piece in c.anomaly_message
     # Exactly 5x is not a jump
     c = analytics.compare(_reading(180, "2026-11-05T00:00:00Z"), _prev(130, "2026-11-04T00:00:00Z"), hist)

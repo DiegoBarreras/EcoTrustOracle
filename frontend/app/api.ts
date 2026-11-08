@@ -232,11 +232,12 @@ async function request<T>(method: string, path: string, init: RequestInit = {}):
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text().catch(() => "");
+  // The body stream can only be read once: parse the text already read above.
   let body: unknown = null;
   try {
-    body = await res.json();
+    body = text ? JSON.parse(text) : null;
   } catch {
-    /* empty */
+    /* non-JSON body: handled below */
   }
   if (res.ok) {
     if (body === null) throw new ApiError(`Respuesta no válida del backend (HTTP ${res.status})`, res.status);

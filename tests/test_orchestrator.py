@@ -22,6 +22,15 @@ def test_counter_below_previous_is_anchored_but_flagged():
     assert history["entries"][-1]["anomaly"] == "reading_below_previous"
 
 
+def test_backwards_reading_is_not_judged_compliant():
+    res = client.post(
+        "/api/v1/audit-sensor", params={"previous_value": 1000, "monthly_threshold": 100}, json={**READING, "device_id": "BACK-1"}
+    )
+    data = res.json()
+    assert data["comparison"]["anomaly"] == "reading_below_previous"
+    assert data["compliance"] is None
+
+
 def test_counter_reports_consumption():
     res = client.post("/api/v1/audit-sensor", params={"previous_value": 100}, json={**READING, "device_id": "CONS-1"})
     assert res.status_code == 201

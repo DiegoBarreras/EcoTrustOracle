@@ -19,7 +19,7 @@ from core.schemas import (
 
 JUMP_FACTOR = 5.0
 MIN_TYPICAL_RATES = 3
-EVIDENCE_NOTE = "Se registro y anclo igualmente como evidencia."
+EVIDENCE_NOTE = "Se registro igualmente como evidencia."
 
 
 def normalize_unit(unit: str) -> str:

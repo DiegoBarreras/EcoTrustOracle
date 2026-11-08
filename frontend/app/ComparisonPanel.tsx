@@ -5,7 +5,15 @@ import { card, WarnIcon } from "./ui";
 const ORIGIN: Record<string, string> = { history: "historial", client: "ingresada" };
 
 /** Top-of-result alert: the suspicious reading was still recorded and anchored as evidence. */
-export function AnomalyBanner({ comparison: c, notification: n }: { comparison: ReadingComparison; notification: NotificationResult }) {
+export function AnomalyBanner({
+  comparison: c,
+  notification: n,
+  simulated = false,
+}: {
+  comparison: ReadingComparison;
+  notification: NotificationResult;
+  simulated?: boolean;
+}) {
   if (!c.anomaly) return null;
   const severe = c.anomaly === "reading_below_previous";
   const tg = !n.sent
@@ -25,7 +33,10 @@ export function AnomalyBanner({ comparison: c, notification: n }: { comparison: 
           <p className="mt-0.5 text-xs font-semibold uppercase tracking-wide opacity-80">{ANOMALY_LABEL[c.anomaly] ?? c.anomaly}</p>
           {c.anomaly_message && <p className="mt-2 text-sm">{c.anomaly_message}</p>}
           <p className="mt-2 text-sm">
-            La lectura se registró y se ancló en Solana como evidencia; {tg}
+            {simulated
+              ? "La lectura se registró como evidencia; el anclaje fue SIMULADO (no está en Solana); "
+              : "La lectura se registró y se ancló en Solana como evidencia; "}
+            {tg}
           </p>
         </div>
       </div>

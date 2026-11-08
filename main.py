@@ -259,7 +259,8 @@ async def _run_audit(
     comparison = None if synthetic and previous_value is None else await _compare_with_previous(reading, previous_value)
     consumption = comparison.consumption if comparison else None
     threshold = monthly_threshold if monthly_threshold is not None else settings.ESG_MONTHLY_THRESHOLD
-    compliance = evaluate_compliance(consumption, threshold, reading.unit)
+    # A counter that went backwards has no meaningful consumption to judge against the threshold.
+    compliance = evaluate_compliance(consumption, threshold, reading.unit) if consumption is None or consumption >= 0 else None
 
     try:
         logger.info(f"[Pipeline] Anchoring reading on Solana Devnet: {reading.value} {reading.unit}")

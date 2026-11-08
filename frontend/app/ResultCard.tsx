@@ -86,7 +86,7 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
 
   return (
     <div className="space-y-4">
-      {comparison?.anomaly && <AnomalyBanner comparison={comparison} notification={n} />}
+      {comparison?.anomaly && <AnomalyBanner comparison={comparison} notification={n} simulated={proof.is_simulated} />}
 
       <section className={card} aria-label="Lectura">
         <div className="flex flex-wrap items-start justify-between gap-2">
