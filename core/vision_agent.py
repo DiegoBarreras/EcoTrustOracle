@@ -14,7 +14,7 @@ from collections import Counter
 from typing import Optional, Dict, Any, List, Tuple
 
 from core.config import get_settings
-from core.schemas import MeterReading, VisionAnalysis
+from core.schemas import MeterReading, VisionAnalysis, VisionRead
 
 logger = logging.getLogger("ecotrust.vision")
 
@@ -75,7 +75,11 @@ Return ONLY raw JSON (no Markdown, no code fences, no comments, no explanations)
 - "confidence" (float): 0.0-1.0 per STEP 3.
 - "obstruction_ratio" (float): 0.0-1.0 per STEP 2.
 - "meter_type" (string): "multi_dial" | "cyclometer" | "seven_segment" | "needle_gauge" | "other".
-Example: {"value": 4821.37, "unit": "m3", "confidence": 0.91, "obstruction_ratio": 0.05, "meter_type": "cyclometer"}
+- "rationale" (string): max ~200 characters, written in Spanish, no emojis. A concrete trace of what you
+  SAW in this image and how you combined it into the value, e.g. "Rodillos negros 0-4-8-2-1, rodillo rojo
+  7 como decimal: 4821.7 m3" or "Diales x1000..x1: 3,7,2,9 (dial 2 entre 7 y 8 -> 7): 3729 kWh". Describe
+  the image, never repeat these instructions.
+Example: {"value": 4821.37, "unit": "m3", "confidence": 0.91, "obstruction_ratio": 0.05, "meter_type": "cyclometer", "rationale": "Rodillos negros 0-4-8-2-1, rodillos rojos 3-7 como decimales: 4821.37 m3"}
 """
 
 
@@ -129,6 +133,42 @@ def _consensus(results: List[Any]) -> Tuple[Dict[str, Any], float, int]:
         cap = OBSTRUCTED_CONFIDENCE_CAP if votes * 2 > len(results) else SPLIT_VOTE_CONFIDENCE_CAP
         confidence = min(confidence, cap)
     return agreeing[0], confidence, votes
+
+
+RATIONALE_MAX_CHARS = 300
+
+
+def _clean_rationale(raw: Any) -> Optional[str]:
+    """Trimmed, truncated rationale string; None when missing, empty or not a string."""
+    rationale = raw.get("rationale") if isinstance(raw, dict) else None
+    if not isinstance(rationale, str) or not rationale.strip():
+        return None
+    return rationale.strip()[:RATIONALE_MAX_CHARS]
+
+
+def _sanitize_error(exc: BaseException) -> str:
+    """Short error text for the API response; anything after "key=" is dropped so a key never leaks."""
+    text = f"{type(exc).__name__}: {str(exc)[:120]}"
+    cut = text.lower().find("key=")
+    return text[:cut + 4] + "[redacted]" if cut != -1 else text
+
+
+def _describe_reads(results: List[Any]) -> List[VisionRead]:
+    """One VisionRead per attempted read, in order, including dissenting and failed ones."""
+    reads = []
+    for raw in results:
+        if isinstance(raw, BaseException):
+            reads.append(VisionRead(error=_sanitize_error(raw)))
+        elif _vote_key(raw) is None:
+            reads.append(VisionRead(error="respuesta sin valor numerico"))
+        else:
+            unit = raw.get("unit")
+            reads.append(VisionRead(
+                value=float(raw["value"]),
+                unit=str(unit) if unit is not None else None,
+                rationale=_clean_rationale(raw),
+            ))
+    return reads
 
 
 class VisionExtractionError(Exception):
@@ -395,6 +435,8 @@ async def analyze_meter_image(
             obstruction_ratio=float(obstruction) if isinstance(obstruction, (int, float)) and math.isfinite(obstruction) else None,
             votes=votes,
             total_reads=CONSENSUS_READS,
+            rationale=_clean_rationale(raw_result),
+            reads=_describe_reads(results),
         )
         return reading, analysis
 

@@ -5,23 +5,29 @@ anchors them to Solana Devnet via the native Memo Program, and returns
 the verifiable Solscan proof URL for corporate ESG compliance.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from typing import Dict, Any, Union, Optional
+
+import requests
 
 from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from solders.instruction import Instruction, AccountMeta
 from solders.message import Message
 from solders.transaction import Transaction
-from solders.hash import Hash
 from solana.rpc.async_api import AsyncClient
 
 from core.config import get_settings
-from core.schemas import MeterReading, OracleProof
+from core.schemas import MeterReading, OracleProof, VerifyResult
 
 logger = logging.getLogger("ecotrust.web3")
+
+MEMO_PREFIX = "EcoTrust:v1:"
+SIMULATED_PREFIX = "SIMULATED-"
 
 
 class SolanaOracleError(Exception):
@@ -29,17 +35,11 @@ class SolanaOracleError(Exception):
     pass
 
 
-def compute_meter_hash(reading: Union[MeterReading, Dict[str, Any]]) -> str:
+def canonical_json(reading: Union[MeterReading, Dict[str, Any]]) -> str:
     """
-    Computes a deterministic SHA-256 hash from a canonicalized MeterReading payload.
-    Ensures that identical readings yield identical cryptographic hashes regardless of
-    field order in the original JSON.
-
-    Args:
-        reading: MeterReading instance or raw dictionary.
-
-    Returns:
-        Hexadecimal SHA-256 digest string.
+    Returns the exact UTF-8 string that is SHA-256 hashed for a reading:
+    the canonical dict serialized with sorted keys and no whitespace.
+    Anyone holding this string can recompute data_hash independently.
     """
     if isinstance(reading, MeterReading):
         canonical_dict = reading.to_canonical_dict()
@@ -55,9 +55,24 @@ def compute_meter_hash(reading: Union[MeterReading, Dict[str, Any]]) -> str:
         if reading.get("device_id"):
             canonical_dict["device_id"] = str(reading["device_id"]).strip()
 
-    canonical_json = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"))
-    sha256_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-    logger.debug(f"🔑 [Web3Oracle] Computed SHA-256: {sha256_hash} for payload: {canonical_json}")
+    return json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"))
+
+
+def compute_meter_hash(reading: Union[MeterReading, Dict[str, Any]]) -> str:
+    """
+    Computes a deterministic SHA-256 hash from a canonicalized MeterReading payload.
+    Ensures that identical readings yield identical cryptographic hashes regardless of
+    field order in the original JSON.
+
+    Args:
+        reading: MeterReading instance or raw dictionary.
+
+    Returns:
+        Hexadecimal SHA-256 digest string.
+    """
+    payload = canonical_json(reading)
+    sha256_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    logger.debug(f"[Web3Oracle] Computed SHA-256: {sha256_hash} for payload: {payload}")
     return sha256_hash
 
 
@@ -108,39 +123,30 @@ def _load_or_generate_keypair() -> tuple[Keypair, bool]:
 def _generate_simulated_proof(
     data_hash: str,
     memo_payload: str,
-    keypair: Keypair,
+    canonical: str,
     reason: str,
 ) -> OracleProof:
     """
-    Generates a simulated Devnet proof for hackathon development when
-    RPC faucet is rate limited or no funded wallet is configured.
+    Builds an unmistakably simulated proof: it was never broadcast, so it carries
+    no explorer link and its signature cannot be confused with a real one.
     """
-    logger.warning(f"⚠️ [Web3Oracle] Generating SIMULATED Solana proof: {reason}")
-    dummy_hash = Hash.default()
-    memo_program = Pubkey.from_string(get_settings().SOLANA_MEMO_PROGRAM_ID)
-    ix = Instruction(
-        program_id=memo_program,
-        data=memo_payload.encode("utf-8"),
-        accounts=[AccountMeta(pubkey=keypair.pubkey(), is_signer=True, is_writable=True)],
-    )
-    msg = Message([ix], keypair.pubkey())
-    signed_tx = Transaction([keypair], msg, dummy_hash)
-    simulated_sig = str(signed_tx.signatures[0])
-    solscan_url = f"{get_settings().SOLSCAN_BASE_URL}/{simulated_sig}?cluster=devnet"
-
+    logger.warning(f"[Web3Oracle] SIMULATED proof (NOT anchored on Solana): {reason}")
     return OracleProof(
         data_hash=data_hash,
-        tx_signature=simulated_sig,
-        solscan_url=solscan_url,
+        tx_signature=f"{SIMULATED_PREFIX}{uuid.uuid4().hex}",
+        solscan_url="",
         memo_payload=memo_payload,
         network="solana-devnet",
         is_simulated=True,
         slot=None,
+        canonical_json=canonical,
+        signer=None,
     )
 
 
 async def anchor_reading_to_solana(
     reading: Union[MeterReading, Dict[str, Any]],
+    force_simulated: bool = False,
     client: Optional[AsyncClient] = None,
 ) -> OracleProof:
     """
@@ -148,21 +154,32 @@ async def anchor_reading_to_solana(
 
     Workflow:
     1. Canonicalize reading and compute SHA-256 hash.
-    2. Format memo string payload: "GP:v1:<hash>".
+    2. Format memo string payload: "EcoTrust:v1:<hash>".
     3. Construct a Solana transaction calling the native Memo Program.
     4. Sign and broadcast transaction on Solana Devnet.
     5. Return Solscan URL and proof metadata.
 
     Args:
         reading: MeterReading instance or dict.
+        force_simulated: Return a simulated proof without touching the RPC or wallet
+            (used for synthetic/mock readings that must never be anchored).
         client: Optional existing AsyncClient connection.
 
     Returns:
         OracleProof: Validated model containing data_hash, tx_signature, and solscan_url.
     """
     settings = get_settings()
+    canonical = canonical_json(reading)
     data_hash = compute_meter_hash(reading)
-    memo_payload = f"EcoTrust:v1:{data_hash}"
+    memo_payload = f"{MEMO_PREFIX}{data_hash}"
+
+    if force_simulated:
+        return _generate_simulated_proof(
+            data_hash=data_hash,
+            memo_payload=memo_payload,
+            canonical=canonical,
+            reason="force_simulated=True (synthetic reading, never anchored)",
+        )
 
     keypair, is_transient = _load_or_generate_keypair()
     memo_program_id = Pubkey.from_string(settings.SOLANA_MEMO_PROGRAM_ID)
@@ -202,7 +219,7 @@ async def anchor_reading_to_solana(
                 return _generate_simulated_proof(
                     data_hash=data_hash,
                     memo_payload=memo_payload,
-                    keypair=keypair,
+                    canonical=canonical,
                     reason=f"Signer {keypair.pubkey()} has insufficient lamports ({balance_lamports}) for tx fee",
                 )
             raise SolanaOracleError(
@@ -242,7 +259,11 @@ async def anchor_reading_to_solana(
             await client.confirm_transaction(sig_obj, commitment="confirmed")
             logger.info(f"✅ [Web3Oracle] Transaction confirmed on-chain!")
         except Exception as confirm_err:
-            logger.warning(f"⚠️ [Web3Oracle] Non-blocking confirmation timeout: {confirm_err}")
+            # The tx was broadcast; it is still a real (unconfirmed) anchor, not a simulation.
+            logger.warning(
+                f"[Web3Oracle] Tx {tx_signature} broadcast but confirmation not observed in time "
+                f"({confirm_err}). Returned as REAL, UNCONFIRMED; check it with verify_anchor."
+            )
 
         return OracleProof(
             data_hash=data_hash,
@@ -252,6 +273,8 @@ async def anchor_reading_to_solana(
             network="solana-devnet",
             is_simulated=False,
             slot=None,
+            canonical_json=canonical,
+            signer=str(keypair.pubkey()),
         )
 
     except Exception as exc:
@@ -260,7 +283,7 @@ async def anchor_reading_to_solana(
             return _generate_simulated_proof(
                 data_hash=data_hash,
                 memo_payload=memo_payload,
-                keypair=keypair,
+                canonical=canonical,
                 reason=f"RPC connection or transaction failure: {exc}",
             )
         raise SolanaOracleError(f"Failed to anchor proof to Solana Devnet: {exc}") from exc
@@ -268,3 +291,131 @@ async def anchor_reading_to_solana(
     finally:
         if should_close_client:
             await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Independent verification
+# ---------------------------------------------------------------------------
+
+_VERIFY_CHECKS = ("tx_found", "tx_succeeded", "memo_found", "hash_matches", "signer_matches")
+
+
+def _rpc_get_transaction(rpc_url: str, tx_signature: str) -> Optional[Dict[str, Any]]:
+    """
+    Synchronous JSON-RPC getTransaction call. Returns the `result` object, or None
+    when the transaction is not found. Raises on transport or RPC-level errors.
+    """
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTransaction",
+        "params": [
+            tx_signature,
+            {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"},
+        ],
+    }
+    resp = requests.post(rpc_url, json=body, timeout=15.0)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("error"):
+        err = data["error"]
+        raise SolanaOracleError(f"RPC error {err.get('code')}: {err.get('message')}")
+    return data.get("result")
+
+
+def _extract_memo_hash(tx: Dict[str, Any], memo_program_id: str) -> Optional[str]:
+    """Returns the hash after 'EcoTrust:v1:' in the first EcoTrust memo instruction, if any."""
+    message = (tx.get("transaction") or {}).get("message") or {}
+    instructions = list(message.get("instructions") or [])
+    for inner in (tx.get("meta") or {}).get("innerInstructions") or []:
+        instructions.extend(inner.get("instructions") or [])
+    for ix in instructions:
+        if not isinstance(ix, dict) or ix.get("programId") != memo_program_id:
+            continue
+        text = ix.get("parsed")
+        if isinstance(text, str) and text.startswith(MEMO_PREFIX):
+            return text[len(MEMO_PREFIX):].strip()
+    return None
+
+
+def _extract_fee_payer(tx: Dict[str, Any]) -> Optional[str]:
+    keys = (((tx.get("transaction") or {}).get("message") or {}).get("accountKeys")) or []
+    if not keys:
+        return None
+    first = keys[0]
+    return first.get("pubkey") if isinstance(first, dict) else str(first)
+
+
+async def verify_anchor(reading: MeterReading, tx_signature: str) -> VerifyResult:
+    """
+    Independently re-checks that `reading` was anchored by this oracle in `tx_signature`:
+    recomputes the canonical JSON and SHA-256, fetches the transaction from the RPC and
+    compares the EcoTrust memo hash and the fee payer. Never raises for normal failures.
+    """
+    settings = get_settings()
+    tx_signature = (tx_signature or "").strip()
+    canonical = canonical_json(reading)
+    computed = compute_meter_hash(reading)
+    checks = {name: False for name in _VERIFY_CHECKS}
+
+    def result(detail: str, memo_hash=None, signer=None, expected=None) -> VerifyResult:
+        return VerifyResult(
+            valid=all(checks.values()),
+            tx_signature=tx_signature,
+            computed_hash=computed,
+            canonical_json=canonical,
+            memo_hash=memo_hash,
+            signer=signer,
+            expected_signer=expected,
+            checks=dict(checks),
+            detail=detail,
+        )
+
+    if tx_signature.startswith(SIMULATED_PREFIX):
+        return result(
+            "Firma SIMULADA: esta prueba nunca se envio a Solana, por lo que no existe en la cadena "
+            "y no puede verificarse."
+        )
+
+    keypair, is_transient = _load_or_generate_keypair()
+    expected_signer = None if is_transient else str(keypair.pubkey())
+
+    try:
+        tx = await asyncio.to_thread(_rpc_get_transaction, settings.SOLANA_RPC_URL, tx_signature)
+    except Exception as exc:
+        # The RPC URL may embed an API key (e.g. Helius ?api-key=), keep it out of logs/responses.
+        msg = str(exc).replace(settings.SOLANA_RPC_URL, "<rpc>") if settings.SOLANA_RPC_URL else str(exc)
+        logger.warning(f"[Web3Oracle] verify_anchor RPC failure for {tx_signature}: {msg}")
+        return result(f"No se pudo consultar el RPC de Solana: {msg}", expected=expected_signer)
+
+    if not tx:
+        return result(
+            "Transaccion no encontrada en Solana Devnet (no existe o aun no esta confirmada).",
+            expected=expected_signer,
+        )
+    checks["tx_found"] = True
+    checks["tx_succeeded"] = (tx.get("meta") or {}).get("err") is None
+
+    memo_hash = _extract_memo_hash(tx, settings.SOLANA_MEMO_PROGRAM_ID)
+    checks["memo_found"] = memo_hash is not None
+    checks["hash_matches"] = memo_hash is not None and memo_hash.lower() == computed.lower()
+
+    signer = _extract_fee_payer(tx)
+    checks["signer_matches"] = expected_signer is not None and signer == expected_signer
+
+    if all(checks.values()):
+        detail = "Verificacion correcta: la lectura coincide con el hash anclado en Solana por este oraculo."
+    else:
+        problems = []
+        if not checks["tx_succeeded"]:
+            problems.append("la transaccion fallo en la cadena")
+        if not checks["memo_found"]:
+            problems.append("no contiene un memo EcoTrust:v1")
+        elif not checks["hash_matches"]:
+            problems.append("el hash del memo no coincide con la lectura enviada")
+        if expected_signer is None:
+            problems.append("el oraculo no tiene una billetera fija configurada para comparar el firmante")
+        elif not checks["signer_matches"]:
+            problems.append("el firmante no es la billetera de este oraculo")
+        detail = "Verificacion fallida: " + "; ".join(problems) + "."
+    return result(detail, memo_hash=memo_hash, signer=signer, expected=expected_signer)
