@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { short, type AuditResponse } from "./api";
+import { translations, type Locale } from "./i18n";
 
 const METER_TYPES: Record<string, string> = {
   multi_dial: "Diales circulares",
@@ -65,7 +66,8 @@ function ConfidenceBar({ value }: { value: number }) {
   );
 }
 
-export function ResultCard({ result, onVerify }: { result: AuditResponse; onVerify: () => void }) {
+export function ResultCard({ result, onVerify, lang = "es" }: { result: AuditResponse; onVerify: () => void; lang?: Locale }) {
+  const t = translations[lang].results;
   const { reading, oracle_proof: proof, notification: n, vision } = result;
   const aiReal = vision && !vision.is_mock;
   const majority = reading.value;
@@ -74,13 +76,13 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
   return (
     <div className="space-y-4">
       <section className={card} aria-label="Lectura">
-        <p className="text-xs uppercase tracking-wide text-slate-400">Lectura certificada</p>
+        <p className="text-xs uppercase tracking-wide text-slate-400">{t.certifiedTitle}</p>
         <p className="mt-1 text-5xl font-bold tabular-nums text-emerald-400">
           {reading.value} <span className="text-2xl text-emerald-300">{reading.unit}</span>
         </p>
         {result.consumption != null && (
           <p className="mt-2 text-sm text-slate-200">
-            Consumo desde la lectura anterior: <strong>{result.consumption} {reading.unit}</strong>
+            {t.consumptionLabel} <strong>{result.consumption} {reading.unit}</strong>
           </p>
         )}
         {result.compliance && (
@@ -89,9 +91,9 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
               <div className="rounded-lg border-2 border-red-500 bg-red-950/70 p-3.5 text-sm text-red-200">
                 <div className="flex items-center justify-between font-bold text-red-100">
                   <span className="flex items-center gap-1.5">
-                    🚨 Umbral mensual excedido (+{result.compliance.excess_percentage}%)
+                    {t.complianceBreachTitle} (+{result.compliance.excess_percentage}%)
                   </span>
-                  <span className="rounded bg-red-500 px-2 py-0.5 text-xs uppercase font-black text-white">Incumplimiento</span>
+                  <span className="rounded bg-red-500 px-2 py-0.5 text-xs uppercase font-black text-white">{t.complianceBreachTag}</span>
                 </div>
                 <p className="mt-1 text-xs text-red-300">
                   El consumo calculado ({result.compliance.consumption} {reading.unit}) superó el umbral de {result.compliance.threshold} {reading.unit}.
@@ -105,9 +107,9 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
               <div className="rounded-lg border border-emerald-500/60 bg-emerald-950/60 p-3.5 text-sm text-emerald-200">
                 <div className="flex items-center justify-between font-bold text-emerald-100">
                   <span className="flex items-center gap-1.5">
-                    🟢 Cumplimiento ESG Conforme
+                    {t.complianceOkTitle}
                   </span>
-                  <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-xs uppercase font-bold text-emerald-300">En Regla</span>
+                  <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-xs uppercase font-bold text-emerald-300">{t.complianceOkTag}</span>
                 </div>
                 <p className="mt-1 text-xs text-emerald-300">
                   Consumo ({result.compliance.consumption} {reading.unit}) dentro del umbral de {result.compliance.threshold} {reading.unit}.
@@ -128,14 +130,14 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
 
         {vision?.is_mock && (
           <div className="mt-4">
-            <Banner tone="amber">Lectura simulada: el servidor no tiene clave de IA</Banner>
+            <Banner tone="amber">{t.simulatedBanner}</Banner>
           </div>
         )}
 
         {aiReal && (
           <div className="mt-4 space-y-3">
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-slate-400">Votos:</span>
+              <span className="text-slate-400">{t.votesLabel}</span>
               {Array.from({ length: vision.total_reads }, (_, i) => (
                 <span
                   key={i}
@@ -144,7 +146,7 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
                 />
               ))}
               <span className="text-slate-200">
-                {vision.votes}/{vision.total_reads} lecturas coinciden
+                {vision.votes}/{vision.total_reads} {t.agreeLabel}
               </span>
             </div>
             <dl className="space-y-1.5">
@@ -185,10 +187,10 @@ export function ResultCard({ result, onVerify }: { result: AuditResponse; onVeri
 
       <section className={card} aria-label="Prueba en Solana">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold">Prueba en Solana</h2>
+          <h2 className="text-lg font-semibold">{t.solanaProofLabel}</h2>
           {proof.is_simulated ? (
             <span className="rounded-full border border-amber-500/60 bg-amber-950/60 px-3 py-1 text-xs font-bold text-amber-200">
-              SIMULADO - no anclado en Solana
+              {t.simulatedProof}
             </span>
           ) : (
             <span className="rounded-full border border-emerald-500/60 bg-emerald-950/60 px-3 py-1 text-xs font-bold text-emerald-200">
