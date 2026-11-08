@@ -18,7 +18,7 @@
 ## 🛠 Developer 1: AI Vision Engineer (`core/vision_agent.py`)
 
 ### Mission
-You own the interface between the analog physical world and digital JSON. You must ensure Gemini 1.5 Flash Vision reliably interprets diverse industrial meter form-factors.
+You own the interface between the analog physical world and digital JSON. You must ensure the Vision AI (DeepSeek, Gemini or Claude, auto-detected from `VISION_API_KEY`) reliably interprets diverse industrial meter form-factors.
 
 ### Key Deliverables & Immediate Tasks
 1. **Multi-Meter Prompt Engineering**:
@@ -30,7 +30,7 @@ You own the interface between the analog physical world and digital JSON. You mu
 2. **Confidence Heuristics**:
    - Calibrate the `confidence` score ($0.0 - 1.0$). If image glare, angle distortion, or dust obscures more than 30% of a dial, flag confidence $< 0.70$.
 3. **Image Preprocessing (Optional Performance Boost)**:
-   - Use `Pillow` or `OpenCV` to auto-orient EXIF orientation, crop bounding boxes around dial clusters, and normalize contrast before dispatching to Gemini.
+   - Use `Pillow` or `OpenCV` to auto-orient EXIF orientation, crop bounding boxes around dial clusters, and normalize contrast before dispatching to the vision model.
 4. **Independent Testing**:
    ```bash
    # Run vision unit tests
@@ -157,7 +157,7 @@ uv run pytest -v
 2. **The Solution (45s)**: "EcoTrust Oracle connects physical infrastructure directly to Solana. An operator takes a single picture of an analog dial."
 3. **Live Demo (60s)**:
    - Upload a photo of a boiler flowmeter via `/api/v1/audit-meter`.
-   - Show Gemini Vision parsing the dial with confidence score in the response.
+   - Show the Vision AI (e.g. DeepSeek) parsing the dial with confidence score in the response.
    - Click the live Solscan URL in the response or Telegram message.
    - Show the Solana Devnet transaction containing the SHA-256 Memo proof.
 4. **The Impact (45s)**: "Zero smart contract deployment fees, instant auditability, tamper-proof corporate ESG compliance on Solana."
