@@ -5,7 +5,7 @@ Vision Agent -> Web3 Oracle -> Notifier -> Orchestrator (FastAPI).
 """
 
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -16,11 +16,14 @@ class MeterReading(BaseModel):
     """
     value: float = Field(
         ...,
+        allow_inf_nan=False,  # NaN/Infinity cannot be hashed reproducibly, so they never reach the chain
         description="Numerical reading value read from analog dial or digital display (e.g. 142.85)",
         examples=[142.85],
     )
     unit: str = Field(
         ...,
+        min_length=1,
+        max_length=32,
         description="Standardized physical unit: kWh, m3, kgCO2, L, PSI, etc.",
         examples=["kWh"],
     )
@@ -43,6 +46,7 @@ class MeterReading(BaseModel):
     )
     device_id: Optional[str] = Field(
         default=None,
+        max_length=128,
         description="Physical asset ID, sensor serial number, or meter tag (e.g. 'SENSOR-MODBUS-042')",
         examples=["SENSOR-MODBUS-042"],
     )
@@ -113,6 +117,36 @@ class OracleProof(BaseModel):
         default=None,
         description="Solana block slot containing the confirmed transaction",
     )
+    canonical_json: Optional[str] = Field(
+        default=None,
+        description="Exact UTF-8 string that was SHA-256 hashed, so anyone can recompute data_hash",
+    )
+    signer: Optional[str] = Field(
+        default=None,
+        description="Base58 public key of the oracle wallet that signed the anchor transaction",
+    )
+
+
+class VerifyRequest(BaseModel):
+    """Input of POST /api/v1/verify: the reading a third party claims was anchored, and the transaction."""
+    reading: MeterReading
+    tx_signature: str = Field(..., min_length=32, max_length=128)
+
+
+class VerifyResult(BaseModel):
+    """Output of core/web3_oracle.verify_anchor: independent re-check of an anchored reading."""
+    valid: bool = Field(..., description="True only if every check passed")
+    tx_signature: str
+    computed_hash: str = Field(..., description="SHA-256 recomputed by the server from the submitted reading")
+    canonical_json: str = Field(..., description="Exact string that was hashed")
+    memo_hash: Optional[str] = Field(default=None, description="Hash found in the on-chain EcoTrust memo")
+    signer: Optional[str] = Field(default=None, description="Fee payer / signer of the transaction")
+    expected_signer: Optional[str] = Field(default=None, description="This oracle's public key")
+    checks: Dict[str, bool] = Field(
+        default_factory=dict,
+        description="tx_found, tx_succeeded, memo_found, hash_matches, signer_matches",
+    )
+    detail: str = Field(default="", description="Human-readable explanation of the result")
 
 
 class NotificationResult(BaseModel):
@@ -146,6 +180,14 @@ class NotificationResult(BaseModel):
     )
 
 
+class VisionRead(BaseModel):
+    """One of the independent vision reads behind the consensus."""
+    value: Optional[float] = None
+    unit: Optional[str] = None
+    rationale: Optional[str] = Field(default=None, description="How the model reached this value (dials/drums/digits it saw)")
+    error: Optional[str] = Field(default=None, description="Why this read failed, if it did")
+
+
 class VisionAnalysis(BaseModel):
     """
     How the vision agent reached the reading. Reported next to the reading, never hashed,
@@ -157,6 +199,8 @@ class VisionAnalysis(BaseModel):
     votes: int = Field(..., description="Independent reads that agreed on the reported value")
     total_reads: int = Field(..., description="Independent reads attempted")
     is_mock: bool = Field(default=False, description="True when no vision API key is configured and a synthetic reading was used")
+    rationale: Optional[str] = Field(default=None, description="Model's explanation for the winning reading")
+    reads: List[VisionRead] = Field(default_factory=list, description="Every independent read, including dissenting or failed ones")
 
 
 class AuditResponse(BaseModel):
@@ -187,6 +231,10 @@ class AuditResponse(BaseModel):
     vision: Optional[VisionAnalysis] = Field(
         default=None,
         description="AI vision analysis details (photo audits only)",
+    )
+    consumption: Optional[float] = Field(
+        default=None,
+        description="reading.value - previous_value, when the client sent the previous counter reading",
     )
 
 
