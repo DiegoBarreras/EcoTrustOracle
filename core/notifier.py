@@ -167,3 +167,91 @@ async def send_audit_notification(
             error=error,
         )
     raise NotificationError(f"Failed to dispatch Telegram message: {error}")
+
+
+async def poll_telegram_commands(stop_event: asyncio.Event) -> None:
+    """
+    Background worker that listens for Telegram commands like /start, /status, /help
+    and replies interactively to users, acknowledging their chat ID for compliance alerts.
+    """
+    settings = get_settings()
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    if not bot_token:
+        logger.info("ℹ️ [Telegram Poller] No TELEGRAM_BOT_TOKEN provided; poller disabled.")
+        return
+
+    offset: Optional[int] = None
+    logger.info("🤖 [Telegram Poller] Started interactive Telegram command listener.")
+
+    while not stop_event.is_set():
+        try:
+            url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+            params: Dict[str, Any] = {"timeout": 3}
+            if offset is not None:
+                params["offset"] = offset
+
+            resp = await asyncio.to_thread(requests.get, url, params=params, timeout=10.0)
+            data = resp.json()
+
+            if not data.get("ok"):
+                await asyncio.sleep(2.0)
+                continue
+
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message")
+                if not msg:
+                    continue
+
+                chat_id = msg.get("chat", {}).get("id")
+                text = (msg.get("text") or "").strip()
+                user_name = msg.get("from", {}).get("first_name", "Auditor")
+
+                if text.startswith("/start"):
+                    reply = (
+                        f"🌿 <b>ECOTRUST ORACLE — ESG COMPLIANCE BOT</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"¡Hola <b>{user_name}</b>! 👋\n\n"
+                        f"Tu cuenta ha sido vinculada con éxito al Oráculo Físico de EcoTrust.\n"
+                        f"🆔 <b>Tu Chat ID:</b> <code>{chat_id}</code>\n\n"
+                        f"✅ A partir de ahora recibirás aquí los certificados de auditoría física "
+                        f"anclados de forma inmutable en <b>Solana Devnet</b> cada vez que se registre un medidor o sensor.\n\n"
+                        f"<b>Comandos:</b>\n"
+                        f"• /status — Verificar estado del oráculo y Solana\n"
+                        f"• /help — Guía rápida de uso"
+                    )
+                    await asyncio.to_thread(_sync_telegram_send, bot_token, str(chat_id), reply)
+                    logger.info(f"✅ [Telegram Poller] Answered /start from {user_name} ({chat_id})")
+
+                elif text.startswith("/status"):
+                    reply = (
+                        f"🌿 <b>EcoTrust Oracle — Estado Operativo</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⚡ <b>Blockchain:</b> Solana Devnet\n"
+                        f"🔒 <b>Memo Program:</b> <code>MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr</code>\n"
+                        f"🤖 <b>AI Vision:</b> Multi-Provider (Gemini / Claude / DeepSeek)\n"
+                        f"🟢 <b>API Gateway:</b> Operacional (FastAPI)\n"
+                        f"🌐 <b>Dashboard:</b> http://localhost:3000"
+                    )
+                    await asyncio.to_thread(_sync_telegram_send, bot_token, str(chat_id), reply)
+                    logger.info(f"✅ [Telegram Poller] Answered /status from {chat_id}")
+
+                elif text.startswith("/help"):
+                    reply = (
+                        f"ℹ️ <b>EcoTrust Oracle — Ayuda</b>\n\n"
+                        f"1. Abre el dashboard web en <code>http://localhost:3000</code>.\n"
+                        f"2. Conecta tu billetera de Solana (Phantom / Solflare).\n"
+                        f"3. Sube la foto de un medidor industrial o introduce datos de sensor IoT.\n"
+                        f"4. Haz clic en 'Auditar'. Recibirás el certificado con link de Solscan aquí mismo en segundos."
+                    )
+                    await asyncio.to_thread(_sync_telegram_send, bot_token, str(chat_id), reply)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning(f"⚠️ [Telegram Poller] Warning during update poll: {exc}")
+            await asyncio.sleep(2.0)
+
+        await asyncio.sleep(0.5)
+
+    logger.info("🛑 [Telegram Poller] Stopped Telegram command listener.")

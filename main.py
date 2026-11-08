@@ -9,6 +9,7 @@ Sequential Pipeline:
 """
 
 import time
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -25,7 +26,7 @@ from core.schemas import (
 )
 from core.vision_agent import read_meter_from_image, VisionExtractionError
 from core.web3_oracle import anchor_reading_to_solana, SolanaOracleError
-from core.notifier import send_audit_notification, NotificationError
+from core.notifier import send_audit_notification, NotificationError, poll_telegram_commands
 
 # Configure structured logging
 logging.basicConfig(
@@ -45,8 +46,22 @@ async def lifespan(app: FastAPI):
     logger.info(f"🤖 Vision model: {'Configured' if settings.VISION_API_KEY else 'MOCK Fallback'}")
     logger.info(f"💬 Telegram Bot: {'Configured' if settings.TELEGRAM_BOT_TOKEN else 'MOCK Fallback'}")
     logger.info("==================================================")
+
+    stop_event = asyncio.Event()
+    poller_task = None
+    if settings.TELEGRAM_BOT_TOKEN:
+        poller_task = asyncio.create_task(poll_telegram_commands(stop_event))
+
     yield
+
     logger.info("🛑 Shutting down EcoTrust Oracle Orchestrator...")
+    if poller_task:
+        stop_event.set()
+        poller_task.cancel()
+        try:
+            await poller_task
+        except asyncio.CancelledError:
+            pass
 
 
 settings = get_settings()
