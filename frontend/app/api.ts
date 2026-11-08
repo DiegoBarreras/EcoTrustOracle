@@ -107,7 +107,7 @@ export async function apiPost<T>(path: string, init?: RequestInit): Promise<T> {
     const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : null;
     const conflict =
       res.status === 409 && detail && typeof detail === "object" && "code" in detail && (detail as { code: unknown }).code === "reading_below_previous"
-        ? (detail as Conflict)
+        ? (detail as unknown as Conflict)
         : undefined;
     throw new ApiError(detailToText(detail) || `El servidor respondió con HTTP ${res.status}`, conflict);
   }
