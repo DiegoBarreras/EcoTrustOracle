@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 // Wallet button renders differently server vs. client; load it client-only to avoid hydration errors.
@@ -24,12 +24,19 @@ const input = "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 
 const button = "rounded-md bg-emerald-500 px-4 py-2 font-semibold text-slate-950 disabled:opacity-40";
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const { publicKey } = useWallet();
   const auditor = publicKey?.toBase58();
   const [mode, setMode] = useState<"meter" | "sensor">("meter");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AuditResponse | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const isAuditorReady = mounted && Boolean(auditor);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -70,7 +77,11 @@ export default function Home() {
     <main className="mx-auto max-w-2xl space-y-6 p-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">🌿 EcoTrust Oracle</h1>
-        <WalletMultiButton />
+        {mounted ? (
+          <WalletMultiButton />
+        ) : (
+          <div className="h-10 w-36 rounded-md bg-slate-800 animate-pulse" />
+        )}
       </header>
 
       <div className="flex gap-2">
@@ -99,8 +110,8 @@ export default function Home() {
             <input name="device_id" placeholder="ID del dispositivo (opcional)" className={input} />
           </>
         )}
-        <button disabled={!auditor || busy} className={button}>
-          {busy ? "Anclando en Solana…" : auditor ? "Auditar" : "Conecta tu billetera para auditar"}
+        <button disabled={!isAuditorReady || busy} className={button}>
+          {busy ? "Anclando en Solana…" : isAuditorReady ? "Auditar" : "Conecta tu billetera para auditar"}
         </button>
       </form>
 
