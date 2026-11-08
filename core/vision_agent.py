@@ -154,8 +154,8 @@ def _get_mock_meter_reading(reason: str = "Mock fallback enabled") -> MeterReadi
 # Key prefix -> (provider, default vision model). Order matters: "sk-ant-" must be checked before "sk-".
 PROVIDERS = (
     ("sk-ant-", "claude", "claude-opus-5-5"),
-    ("AIza", "gemini", "gemini-3.6-flash"),
-    ("AQ.", "gemini", "gemini-3.6-flash"),  # newer AI Studio key format
+    ("AIza", "gemini", "gemini-1.5-flash"),
+    ("AQ.", "gemini", "gemini-1.5-flash"),  # newer AI Studio key format
     ("sk-", "deepseek", "deepseek-flash"),
 )
 OPENAI_COMPATIBLE_URLS = {
@@ -270,9 +270,10 @@ async def read_meter_from_image(
     """
     settings = get_settings()
 
-    if not settings.VISION_API_KEY:
+    api_key = (settings.VISION_API_KEY or "").strip()
+    if not api_key or api_key == "your_gemini_api_key_here" or api_key.startswith("your_"):
         if settings.VISION_MOCK_FALLBACK:
-            return _get_mock_meter_reading(reason="VISION_API_KEY not configured")
+            return _get_mock_meter_reading(reason="VISION_API_KEY not configured or placeholder detected")
         raise VisionExtractionError("VISION_API_KEY is not configured and VISION_MOCK_FALLBACK=False")
 
     try:

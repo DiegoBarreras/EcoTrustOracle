@@ -6,7 +6,7 @@ Provides sensible defaults and fallback toggles for hackathon development.
 
 from functools import lru_cache
 from typing import Optional
-from pydantic import Field
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,10 +30,12 @@ class Settings(BaseSettings):
     # AI Vision (provider auto-detected from the key: Gemini "AIza..."/"AQ....", Claude "sk-ant-...", DeepSeek "sk-...")
     VISION_API_KEY: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("VISION_API_KEY", "GEMINI_API_KEY"),
         description="API key of the vision model provider (Gemini, Claude or DeepSeek)",
     )
     VISION_MODEL: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("VISION_MODEL", "GEMINI_MODEL"),
         description="Optional model override; empty uses the provider's default vision model",
     )
     VISION_MOCK_FALLBACK: bool = Field(
