@@ -90,6 +90,31 @@ async def test_notifier_formatting_and_mock():
 
 
 @pytest.mark.asyncio
+async def test_notifier_multiple_chat_ids(monkeypatch):
+    """Comma-separated chat IDs each get the message; one failure does not block the others."""
+    import core.notifier as notifier
+
+    sent_to = []
+
+    def fake_send(token, chat_id, text):
+        sent_to.append(chat_id)
+        if chat_id == "222":
+            raise notifier.NotificationError("chat not found")
+        return {"ok": True, "result": {"message_id": int(chat_id)}}
+
+    monkeypatch.setattr(notifier, "_sync_telegram_send", fake_send)
+    monkeypatch.setattr(notifier.get_settings(), "TELEGRAM_BOT_TOKEN", "test-token")
+
+    reading = MeterReading(value=1.0, unit="kWh", confidence=1.0, timestamp="2026-11-08T01:20:00Z")
+    result = await send_audit_notification(reading, "https://solscan.io/tx/x", chat_id="111, 222,333")
+
+    assert sent_to == ["111", "222", "333"]
+    assert result.sent is True and result.is_mock is False
+    assert result.recipient == "111,333"
+    assert "222: chat not found" in result.error
+
+
+@pytest.mark.asyncio
 async def test_vision_agent_mock_fallback():
     """Verify that Vision Agent safely falls back when no Gemini API key is set."""
     dummy_image = b"\xff\xd8\xff\xe0\x00\x10JFIF"  # Minimal dummy JPEG header
