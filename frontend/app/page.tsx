@@ -18,6 +18,22 @@ type AuditResponse = {
   oracle_proof: { data_hash: string; solscan_url: string; tx_signature: string; is_simulated: boolean };
   notification: { sent: boolean; is_mock: boolean; error: string | null };
   execution_time_ms: number;
+  vision?: {
+    model: string;
+    meter_type: string | null;
+    obstruction_ratio: number | null;
+    votes: number;
+    total_reads: number;
+    is_mock: boolean;
+  } | null;
+};
+
+const METER_TYPES: Record<string, string> = {
+  multi_dial: "Diales circulares",
+  cyclometer: "Rodillos (odómetro)",
+  seven_segment: "Display digital",
+  needle_gauge: "Manómetro de aguja",
+  other: "Otro",
 };
 
 const input = "w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm";
@@ -123,6 +139,24 @@ export default function Home() {
             {result.reading.value} {result.reading.unit}
           </p>
           <p>Confianza: {(result.reading.confidence * 100).toFixed(1)}%</p>
+          {result.vision &&
+            (result.vision.is_mock ? (
+              <p className="rounded-md bg-amber-950 p-2 text-amber-300">
+                ⚠️ Lectura simulada: el servidor no tiene clave de IA configurada.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 rounded-md bg-slate-800 p-3">
+                <p>🤖 Modelo: <code>{result.vision.model}</code></p>
+                <p>🔎 Tipo: {METER_TYPES[result.vision.meter_type ?? ""] ?? result.vision.meter_type ?? "—"}</p>
+                <p>
+                  🗳 Consenso: {result.vision.votes}/{result.vision.total_reads} lecturas coinciden
+                </p>
+                <p>
+                  🌫 Obstrucción:{" "}
+                  {result.vision.obstruction_ratio == null ? "—" : `${(result.vision.obstruction_ratio * 100).toFixed(0)}%`}
+                </p>
+              </div>
+            ))}
           <p className="break-all">
             SHA-256: <code>{result.oracle_proof.data_hash}</code>
           </p>

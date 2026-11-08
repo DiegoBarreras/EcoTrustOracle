@@ -24,7 +24,7 @@ from core.schemas import (
     AuditResponse,
     HealthResponse,
 )
-from core.vision_agent import read_meter_from_image, VisionExtractionError
+from core.vision_agent import analyze_meter_image, VisionExtractionError
 from core.web3_oracle import anchor_reading_to_solana, SolanaOracleError
 from core.notifier import send_audit_notification, NotificationError, poll_telegram_commands
 
@@ -165,7 +165,7 @@ async def audit_meter(
     # Step 1: AI Vision Extraction (Developer 1 Module)
     try:
         logger.info(f"📸 [Pipeline Step 1/3] Processing meter image '{file.filename}' ({len(image_bytes)} bytes)")
-        reading: MeterReading = await read_meter_from_image(
+        reading, vision = await analyze_meter_image(
             image_bytes=image_bytes,
             mime_type=content_type,
             meter_hint=meter_hint,
@@ -214,6 +214,7 @@ async def audit_meter(
                 "error": str(err),
             },
             execution_time_ms=elapsed_ms,
+            vision=vision,
         )
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -225,6 +226,7 @@ async def audit_meter(
         oracle_proof=oracle_proof,
         notification=notification,
         execution_time_ms=elapsed_ms,
+        vision=vision,
     )
 
 
